@@ -1,0 +1,4 @@
+email,first_name,last_name,company,title,website,pain,outcome
+alex@acme.io,Alex,Rivera,Acme,Head of Ops,acme.io,manual invoice reconciliation,close the books 4 days faster
+sam@northwind.co,Sam,Lee,Northwind,Founder,northwind.co,support tickets piling up overnight,cut first-response time in half
+jordan@vela.app,Jordan,Kim,Vela,VP Eng,vela.app,flaky CI eating release windows,ship on Fridays without fear
