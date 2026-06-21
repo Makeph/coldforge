@@ -9,7 +9,8 @@ No SaaS, no account, no required API keys. Your prospect data and your `.env`
 never leave your machine — it's a single SQLite file you can delete and rebuild.
 
 ```bash
-pip install "coldforge[all]"     # or just `coldforge` for the zero-dep core
+git clone https://github.com/Makeph/coldforge && cd coldforge
+pip install -e ".[all]"            # or `pip install -e .` for the zero-dep core
 coldforge init
 coldforge leads import examples/leads.csv
 coldforge research --all
@@ -18,6 +19,9 @@ coldforge campaign activate q3 --leads examples/leads.csv
 coldforge campaign preview q3      # review the whole timeline first
 coldforge tick --dry-run           # see exactly what would send
 ```
+
+> Not on PyPI yet — install from source as above. (`pip install coldforge`
+> will be the one-liner once it's published.)
 
 ---
 
