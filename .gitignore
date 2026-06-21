@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# coldforge local state (never commit prospect data or secrets)
+.env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.coldforge/
+data/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+.idea/
+.DS_Store

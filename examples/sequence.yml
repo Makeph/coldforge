@@ -1,0 +1,17 @@
+# Example coldforge sequence.
+#
+#   coldforge campaign create --name q3-outreach --sequence examples/sequence.yml
+#   coldforge campaign activate q3-outreach --leads examples/leads.csv
+#   coldforge campaign preview q3-outreach
+#
+# Each step renders a template. `condition: no_reply` steps auto-cancel for a
+# lead the moment a reply is recorded (manually via `coldforge reply mark` or
+# via IMAP with `coldforge tick --scan-replies`).
+
+- template: sales_pain_point      # concrete opener built from the lead's `pain`
+  wait_days: 0
+  condition: always
+
+- template: followup_bump         # one soft bump, same thread, only if silent
+  wait_days: 3
+  condition: no_reply
