@@ -49,9 +49,9 @@ coldforge = "coldforge.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["coldforge"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"coldforge/templates" = "coldforge/templates"
+# The curated template pack (.md) ships inside the package and is loaded at
+# runtime, so it must be in the wheel alongside the .py sources.
+artifacts = ["coldforge/templates/**/*.md"]
 
 [tool.ruff]
 line-length = 100
