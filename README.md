@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="coldforge — research → personalize → sequence → send → follow" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Makeph/coldforge/actions/workflows/ci.yml"><img src="https://github.com/Makeph/coldforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/MCP-server-8b5cf6" alt="MCP server">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+</p>
+
 # coldforge
 
 **Honest, local-first cold outreach.** Research a prospect → personalize the

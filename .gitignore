@@ -25,3 +25,7 @@ data/
 .vscode/
 .idea/
 .DS_Store
+
+# local build/test scratch
+.installtest/
+.smoke*/
