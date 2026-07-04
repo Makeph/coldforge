@@ -34,8 +34,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ai = ["anthropic>=0.40"]          # real Claude personalization (falls back to template fill)
-mcp = ["mcp>=1.2"]                # expose research_prospect / draft_email to Claude
+ai = ["anthropic>=0.40"]          # LLM personalization via the Anthropic API (falls back to template fill)
+mcp = ["mcp>=1.2"]                # expose research_prospect / draft_email over MCP
 dns = ["dnspython>=2.6"]          # SPF/DKIM/DMARC checks without DNS-over-HTTPS
 dev = ["pytest>=8.0", "ruff>=0.6"]
 all = ["anthropic>=0.40", "mcp>=1.2", "dnspython>=2.6"]

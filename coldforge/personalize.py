@@ -5,12 +5,12 @@ Two modes, chosen automatically:
 * **Template fill** (always available, no key): render ``{{vars}}`` from the
   lead, and if a researched signal exists, weave it into the opener variable so
   the first line is concrete. Deterministic and offline.
-* **Claude rewrite** (when ``ANTHROPIC_API_KEY`` is set): the template becomes a
-  *brief*. Claude rewrites the body around the signal while honouring the
+* **LLM rewrite** (when ``ANTHROPIC_API_KEY`` is set): the template becomes a
+  *brief*. The model rewrites the body around the signal while honouring the
   template's constraints (length, one CTA, plaintext, deliverability notes).
 
-The Claude path falls back to template fill on any error, so a draft is always
-produced.
+The rewrite path falls back to template fill on any error, so a draft is
+always produced.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _template_fill(template: Template, variables: dict[str, str]) -> Draft:
                  personalized=False, notes=notes)
 
 
-def _claude_rewrite(template: Template, variables: dict[str, str],
+def _llm_rewrite(template: Template, variables: dict[str, str],
                     signal: Signal | None, settings: Settings) -> Draft | None:
     try:
         import anthropic
@@ -99,7 +99,7 @@ def _claude_rewrite(template: Template, variables: dict[str, str],
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
     except Exception as exc:  # noqa: BLE001 — any API failure → fall back
         return Draft(subject="", body="", template_id=template.id, personalized=False,
-                     notes=f"Claude unavailable ({exc.__class__.__name__}); used template fill.")
+                     notes=f"LLM unavailable ({exc.__class__.__name__}); used template fill.")
 
     m = re.match(r"\s*SUBJECT:\s*(?P<subj>.+?)\n(?P<body>.*)$", text, re.DOTALL | re.I)
     if not m:
@@ -136,7 +136,7 @@ def draft_email(
     variables = _inject_signal(template, variables, signal)
 
     if settings.has_ai and not force_template_fill:
-        drafted = _claude_rewrite(template, variables, signal, settings)
+        drafted = _llm_rewrite(template, variables, signal, settings)
         if drafted and drafted.body:
             return drafted
         # else: fall through to deterministic fill (note carried via fill below)

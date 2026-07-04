@@ -12,7 +12,7 @@
     coldforge reply mark <lead>          # record a reply (cancels follow-ups)
     coldforge stats [name]               # results
     coldforge doctor <domain>            # SPF/DKIM/DMARC deliverability
-    coldforge mcp                        # run the MCP server for Claude
+    coldforge mcp                        # run the MCP server (any MCP client)
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def doctor(domain: str = typer.Argument(..., help="Sending domain, e.g. acme.com
 
 @app.command("mcp")
 def run_mcp() -> None:
-    """Run the MCP server (research_prospect / draft_email) over stdio for Claude."""
+    """Run the MCP server (research_prospect / draft_email) over stdio."""
     try:
         from .mcp_server import main as mcp_main
     except ImportError:
@@ -266,7 +266,7 @@ def draft(
     no_ai: bool = typer.Option(False, "--no-ai", help="Force deterministic template fill."),
     do_research: bool = typer.Option(False, "--research", help="Research first, then draft."),
 ) -> None:
-    """Write a single email for a lead (Claude-personalized when a key is set)."""
+    """Write a single email for a lead (LLM-personalized when a key is set)."""
     from .personalize import draft_email
 
     settings = get_settings()

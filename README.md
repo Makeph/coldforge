@@ -14,7 +14,7 @@
 **Honest, local-first cold outreach.** Research a prospect → personalize the
 opener → run a safe, sequenced campaign → auto-follow-up only the people who
 didn't reply. One shared Python core, two front-ends: a **CLI** and an **MCP
-server** you can drive from Claude.
+server** you can drive from any MCP client.
 
 No SaaS, no account, no required API keys. Your prospect data and your `.env`
 never leave your machine — it's a single SQLite file you can delete and rebuild.
@@ -48,9 +48,9 @@ rebuilt small and honest:
 | LLM-personalized emails | `ProspectAI` | ~150 lines, not 137k; **always** degrades to template fill |
 | Curated reply-driving templates, silent-reply follow-up, SPF/DKIM/DMARC check | `coldflow` | Original template pack + `doctor` + reply→cancel rule |
 
-Everything **degrades gracefully**: no Anthropic key → deterministic template
-fill; no Tavily key → DuckDuckGo + site scrape; no SMTP → dry-run only. You can
-run the entire pipeline end-to-end with an empty `.env`.
+Everything **degrades gracefully**: no `ANTHROPIC_API_KEY` → deterministic
+template fill; no Tavily key → DuckDuckGo + site scrape; no SMTP → dry-run
+only. You can run the entire pipeline end-to-end with an empty `.env`.
 
 ## Two front-ends, one core
 
@@ -77,14 +77,14 @@ coldforge reply mark alex@acme.io        # records a reply → cancels follow-up
 coldforge stats q3
 ```
 
-### MCP (drive it from Claude)
+### MCP (drive it from any MCP client)
 
 ```bash
 pip install "coldforge[mcp]"
 coldforge mcp        # stdio server
 ```
 
-Register it with any MCP client (e.g. Claude Desktop / Claude Code):
+Register it with your MCP client:
 
 ```json
 {
@@ -95,9 +95,9 @@ Register it with any MCP client (e.g. Claude Desktop / Claude Code):
 ```
 
 Tools exposed: `research_prospect`, `draft_email`, `list_templates`,
-`show_template`, `check_deliverability`. Now you can ask Claude *"research Alex
-at Acme and draft a pain-point cold email"* and it uses the same engine the CLI
-does.
+`show_template`, `check_deliverability`. Now you can ask your assistant
+*"research Alex at Acme and draft a pain-point cold email"* and it uses the
+same engine the CLI does.
 
 ## Sequences
 
@@ -134,7 +134,7 @@ Everything is optional — copy `.env.example` to `.env` and fill what you need.
 
 | Variable | Purpose | Without it |
 |----------|---------|------------|
-| `ANTHROPIC_API_KEY` | Claude-personalized drafts | deterministic template fill |
+| `ANTHROPIC_API_KEY` | LLM-personalized drafts | deterministic template fill |
 | `TAVILY_API_KEY` | high-quality research | DuckDuckGo + site scrape |
 | `SMTP_*`, `COLDFORGE_FROM_*` | actually send mail | dry-run only |
 | `IMAP_*` | auto-detect replies | mark replies manually |

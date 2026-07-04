@@ -1,4 +1,4 @@
-"""MCP server exposing coldforge's research + drafting to Claude.
+"""MCP server exposing coldforge's research + drafting over MCP.
 
 Run it with ``coldforge mcp`` (stdio) and point any MCP client at it. The same
 shared core powers the CLI, so a draft written here is identical to one written
@@ -62,7 +62,7 @@ def _build_server():
                     title: str = "", signal: str = "", variables: dict | None = None) -> dict:
         """Draft a cold email from a template for one prospect. Pass a `signal`
         (e.g. from research_prospect) to make the opener specific. Extra template
-        variables go in `variables`. Returns subject + body; Claude-personalizes
+        variables go in `variables`. Returns subject + body; LLM-personalizes
         the body when ANTHROPIC_API_KEY is set, else fills the template."""
         lead = Lead(email="unknown@example.com", first_name=first_name,
                     company=company, title=title, custom=variables or {})
