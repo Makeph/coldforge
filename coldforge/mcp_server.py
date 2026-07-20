@@ -10,6 +10,10 @@ Tools
 * ``draft_email(template_id, ...)``                      → a ready-to-review email
 * ``list_templates(category?)``                          → the template pack
 * ``check_deliverability(domain)``                       → SPF / DKIM / DMARC
+* ``build_icp(site)``                                    → who buys what you sell
+* ``score_prospect(...)``                                → 0–100 fit vs the ICP
+* ``lint_email(subject, body)``                          → spam-filter content check
+* ``classify_reply(subject, body)``                      → reply triage category
 
 Requires the ``mcp`` extra: ``pip install 'coldforge[mcp]'``.
 """
@@ -90,6 +94,51 @@ def _build_server():
         return {"domain": r.domain, "score": r.score, "verdict": r.verdict,
                 "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail, "fix": c.fix}
                            for c in r.checks]}
+
+    @mcp.tool()
+    def build_icp(site: str) -> dict:
+        """Read a product website and derive an Ideal Customer Profile: what it
+        sells, the pains it removes, and ranked buyer segments. Saved to
+        $COLDFORGE_HOME/icp.json so `score_prospect` and the CLI can use it."""
+        from .icp import build_icp as _build, save_icp
+
+        icp = _build(site, get_settings())
+        save_icp(icp)
+        return icp
+
+    @mcp.tool()
+    def score_prospect(email: str = "", first_name: str = "", company: str = "",
+                       title: str = "", website: str = "", signal: str = "") -> dict:
+        """Score a prospect 0-100 against the stored ICP (build_icp first).
+        Pass whatever fields you know; a researched `signal` sharpens the score."""
+        from .icp import load_icp, score_lead
+
+        icp = load_icp()
+        if not icp:
+            return {"error": "No ICP stored yet — call build_icp(site) first."}
+        lead = Lead(email=email or "unknown@example.com", first_name=first_name,
+                    company=company, title=title, website=website)
+        score, reason = score_lead(lead, icp, signal_text=signal, settings=get_settings())
+        return {"score": score, "reason": reason, "icp_site": icp.get("site", "")}
+
+    @mcp.tool()
+    def lint_email(subject: str, body: str) -> dict:
+        """Spam-filter check email copy before sending: trigger words (EN+FR),
+        link count, all-caps, length, unfilled variables. Score < 70 → rewrite."""
+        from .lint import lint_draft
+
+        r = lint_draft(subject, body)
+        return {"score": r.score, "ok": r.ok,
+                "issues": [{"severity": i.severity, "message": i.message} for i in r.issues]}
+
+    @mcp.tool()
+    def classify_reply(subject: str, body: str) -> dict:
+        """Triage a reply to a cold email: interested, not_interested,
+        unsubscribe, ooo, or other. An unsubscribe should go straight to
+        `coldforge suppress add`."""
+        from .replies import classify_reply as _classify
+
+        return {"category": _classify(subject, body, get_settings())}
 
     return mcp
 

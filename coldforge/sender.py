@@ -40,6 +40,9 @@ class SmtpSender:
         msg["From"] = formataddr((self.s.from_name or "", self.s.from_email))
         msg["To"] = to
         msg["Subject"] = subject
+        # A one-click opt-out path keeps recipients (and filters) on your side —
+        # replies with unsubscribe intent are auto-suppressed by `reply scan`.
+        msg["List-Unsubscribe"] = f"<mailto:{self.s.from_email}?subject=unsubscribe>"
         msg.set_content(body)
 
         if self.s.smtp_starttls:
@@ -63,11 +66,16 @@ def make_sender(settings: Settings, *, dry_run: bool):
 
 def scan_replies(store: Store, settings: Settings, *, mailbox: str = "INBOX",
                  limit: int = 200) -> int:
-    """Poll IMAP and record a reply for any known lead who emailed us.
+    """Poll IMAP, record replies from known leads, and triage each one.
 
-    Matching is by sender address against the leads table. Returns the number of
-    *new* replies recorded. Best-effort: returns 0 if IMAP isn't configured.
+    Matching is by sender address against the leads table. Every new reply is
+    classified (interested / not_interested / unsubscribe / ooo / other — see
+    :mod:`coldforge.replies`); unsubscribe intent lands the address on the
+    suppression list immediately. Returns the number of *new* replies recorded.
+    Best-effort: returns 0 if IMAP isn't configured.
     """
+    from .replies import classify_reply
+
     if not settings.can_detect_replies:
         return 0
 
@@ -84,13 +92,38 @@ def scan_replies(store: Store, settings: Settings, *, mailbox: str = "INBOX",
             return 0
         ids = data[0].split()[-limit:]
         for mid in reversed(ids):
-            typ, msg_data = imap.fetch(mid, "(BODY[HEADER.FIELDS (FROM)])")
+            typ, msg_data = imap.fetch(mid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
             if typ != "OK" or not msg_data or not msg_data[0]:
                 continue
             raw = msg_data[0][1].decode(errors="ignore")
-            _, addr = parseaddr(raw)
+            _, addr = parseaddr(_header_value(raw, "from"))
             lead = known.get(addr.lower())
-            if lead and lead.id is not None and not store.has_replied(lead.id):
-                store.record_reply(lead.id, None, source="imap")
-                recorded += 1
+            if not lead or lead.id is None or store.has_replied(lead.id):
+                continue
+            subject = _header_value(raw, "subject")
+            body = _fetch_body_snippet(imap, mid)
+            category = classify_reply(subject, body, settings)
+            store.record_reply(lead.id, None, source="imap", category=category)
+            if category == "unsubscribe":
+                store.suppress(lead.email, reason="reply asked to stop")
+            recorded += 1
     return recorded
+
+
+def _header_value(raw_headers: str, name: str) -> str:
+    for line in raw_headers.splitlines():
+        if line.lower().startswith(f"{name}:"):
+            return line.partition(":")[2].strip()
+    return ""
+
+
+def _fetch_body_snippet(imap: imaplib.IMAP4_SSL, mid: bytes, *, size: int = 1500) -> str:
+    """First bytes of the message text, best-effort — enough for triage,
+    cheap enough to do per reply. Empty string on any server quirk."""
+    try:
+        typ, msg_data = imap.fetch(mid, f"(BODY.PEEK[TEXT]<0.{size}>)")
+        if typ == "OK" and msg_data and msg_data[0] and isinstance(msg_data[0], tuple):
+            return msg_data[0][1].decode(errors="ignore")
+    except (imaplib.IMAP4.error, OSError):
+        pass
+    return ""

@@ -166,3 +166,151 @@ def _min_settings() -> Settings:
         imap_port=993, imap_user=None, imap_password=None, daily_limit=40,
         send_window=(time(9, 0), time(17, 0)), send_days={0, 1, 2, 3, 4}, min_gap_seconds=0,
     )
+
+
+# ── verification (offline: check_mx=False) ───────────────────────────────────
+def test_verify_email_offline():
+    from coldforge.verify import verify_email
+
+    assert verify_email("dana@acme.io", check_mx=False).status == "ok"
+    assert verify_email("not-an-email", check_mx=False).status == "invalid"
+    assert verify_email("x@mailinator.com", check_mx=False).status == "invalid"
+    risky = verify_email("info@acme.io", check_mx=False)
+    assert risky.status == "risky" and "role" in risky.reasons[0]
+
+
+def test_invalid_lead_never_scheduled(store, settings):
+    lead = store.upsert_lead(Lead(email="dead@x.io", custom={"pain": "p", "outcome": "o"}))
+    store.set_verify_status(lead.id, "invalid")
+    camp = store.create_campaign(Campaign(name="cv", from_email="d@me.com",
+                                          sequence=normalize_sequence(
+                                              [{"template": "sales_pain_point"}])))
+    n = schedule_campaign(store, camp, store.list_leads(), settings,
+                          start=datetime(2030, 1, 1, 9, 0))
+    assert n == 0
+
+
+# ── suppression list ─────────────────────────────────────────────────────────
+def test_suppression_roundtrip(store):
+    store.suppress("Out@X.io", reason="asked to stop")
+    assert store.is_suppressed("out@x.io")
+    assert store.list_suppressions()[0][0] == "out@x.io"
+    assert store.unsuppress("out@x.io")
+    assert not store.is_suppressed("out@x.io")
+
+
+def test_tick_skips_suppressed_and_cancels(store, settings):
+    camp, _ = _seed_campaign(store, settings)
+    store.suppress("l1@x.io", reason="opt-out")
+    res = tick(store, settings, DryRunSender(), now=datetime(2030, 1, 1, 10, 0))
+    sent_emails = {store.get_lead(m.lead_id).email for m in res.sent}
+    assert "l1@x.io" not in sent_emails
+    assert len(res.skipped_suppressed) == 1
+    # the suppressed lead's follow-up (step 1) was canceled too
+    statuses = {m.step: m.status for m in store.messages_for_campaign(camp.id)
+                if store.get_lead(m.lead_id).email == "l1@x.io"}
+    assert statuses == {0: "skipped", 1: "canceled"}
+
+
+# ── reply triage (keyword path, no key) ──────────────────────────────────────
+def test_classify_reply_keywords(settings):
+    from coldforge.replies import classify_reply
+
+    assert classify_reply("Re: x", "Merci de me désinscrire de vos emails", settings) == "unsubscribe"
+    assert classify_reply("Automatic reply", "I am out of office until Monday", settings) == "ooo"
+    assert classify_reply("Re: x", "Pas intéressé, merci", settings) == "not_interested"
+    assert classify_reply("Re: x", "Intéressé — on peut échanger cette semaine ?",
+                          settings) == "interested"
+    assert classify_reply("Re: x", "qui êtes-vous ?", settings) == "other"
+
+
+def test_reply_category_stored(store):
+    lead = store.upsert_lead(Lead(email="r@x.io"))
+    store.record_reply(lead.id, None, source="manual", category="interested")
+    assert store.reply_categories() == {"interested": 1}
+
+
+# ── content lint ─────────────────────────────────────────────────────────────
+def test_lint_flags_spam_and_unfilled_vars():
+    from coldforge.lint import lint_draft
+
+    bad = lint_draft("GRATUIT — cliquez ici !!!",
+                     "Act now! Buy now! 100% free guarantee, cliquez ici {{name}} "
+                     "http://a.io http://b.io")
+    assert not bad.ok
+    messages = " ".join(i.message for i in bad.issues)
+    assert "spam-trigger" in messages and "{{variables}}" in messages
+
+    good = lint_draft("Acme + reporting ?",
+                      "Bonjour Sam, j'ai vu votre dernier article sur le SEO local. "
+                      "On aide les agences comme la vôtre à prouver leur travail chaque mois. "
+                      "Est-ce un sujet chez vous en ce moment ?")
+    assert good.ok and good.score == 100
+
+
+# ── ICP heuristics (offline) ─────────────────────────────────────────────────
+def test_icp_heuristic_build_and_score(settings):
+    from coldforge.icp import _heuristic_icp, score_lead
+
+    text = ("Acme est le registre de décisions des agences SEO, Ads et growth. "
+            "Chaque matin le brief détecte budgets, tracking et dérives. "
+            "Chaque mois la preuve part au client des agences.")
+    icp = _heuristic_icp("acme.fr", text)
+    assert icp["source"] == "heuristic" and "agences" in icp["keywords"]
+
+    fit = Lead(email="d@agence-seo.fr", company="Agence Lumen", title="Fondateur, agence SEO")
+    misfit = Lead(email="j@bakery.fr", company="Boulangerie Paul", title="Gérant")
+    fit_score, fit_reason = score_lead(fit, icp, settings=settings)
+    misfit_score, _ = score_lead(misfit, icp, settings=settings)
+    assert fit_score > misfit_score
+    assert "matches:" in fit_reason
+
+
+def test_icp_save_load_roundtrip(settings):
+    from coldforge.icp import load_icp, save_icp
+
+    icp = {"site": "x.io", "product": "p", "keywords": ["k"], "segments": []}
+    save_icp(icp, settings)
+    assert load_icp(settings) == icp
+
+
+# ── db migration ─────────────────────────────────────────────────────────────
+def test_migration_adds_columns_to_old_db(tmp_path):
+    import sqlite3
+
+    old = tmp_path / "old.db"
+    conn = sqlite3.connect(old)
+    conn.executescript(
+        "CREATE TABLE leads (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE,"
+        " first_name TEXT DEFAULT '', last_name TEXT DEFAULT '', company TEXT DEFAULT '',"
+        " title TEXT DEFAULT '', website TEXT DEFAULT '', linkedin TEXT DEFAULT '',"
+        " custom TEXT DEFAULT '{}', created_at TEXT NOT NULL);"
+        "CREATE TABLE replies (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER NOT NULL,"
+        " campaign_id INTEGER, detected_at TEXT NOT NULL, source TEXT DEFAULT 'manual');"
+        "INSERT INTO leads(email, created_at) VALUES('old@x.io', '2025-01-01T00:00:00');"
+    )
+    conn.commit()
+    conn.close()
+
+    s = Store(old)
+    lead = s.find_lead("old@x.io")
+    assert lead is not None and lead.fit_score is None and lead.verify_status == ""
+    s.set_fit(lead.id, 80, "matches")
+    s.set_verify_status(lead.id, "ok")
+    again = s.find_lead("old@x.io")
+    assert again.fit_score == 80 and again.verify_status == "ok"
+    s.close()
+
+
+# ── French template pack ─────────────────────────────────────────────────────
+def test_fr_agency_pack_loads(settings):
+    pack = load_all()
+    fr = [t for t in pack.values() if t.category == "sales-fr"]
+    assert {t.id for t in fr} >= {"fr_agence_preuve", "fr_agence_relance",
+                                  "fr_agence_derniere_porte"}
+    lead = Lead(email="d@agence.fr", first_name="Léa", company="Agence Lumen", id=1,
+                custom={"pain": "le client ne voit pas le travail",
+                        "outcome": "la preuve mensuelle part toute seule",
+                        "observation": "Vu votre étude de cas Google Ads"})
+    d = draft_email("fr_agence_preuve", lead, settings=settings, force_template_fill=True)
+    assert "Léa" in d.body and "{{" not in d.body.replace("{{sender_name}}", "")

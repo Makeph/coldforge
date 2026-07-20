@@ -1,16 +1,21 @@
 """coldforge command-line interface.
 
     coldforge init                       # set up local storage + example files
+    coldforge icp build --site my.site   # learn what you sell → who buys it
     coldforge templates [show ID]        # browse the template pack
     coldforge leads import leads.csv     # load targets
+    coldforge leads verify               # syntax / disposable / MX before sending
+    coldforge leads score                # rank every lead 0-100 against the ICP
     coldforge research <lead|--all>      # gather personalization signals
     coldforge draft --lead X --template T# write a single email (AI if key set)
+    coldforge lint --lead X --template T # spam-filter check the copy
     coldforge campaign create ...        # build a sequenced campaign
     coldforge campaign preview <name>    # review the full schedule
     coldforge campaign activate <name>   # schedule it
     coldforge tick [--dry-run]           # send due mail (run from cron)
     coldforge reply mark <lead>          # record a reply (cancels follow-ups)
-    coldforge stats [name]               # results
+    coldforge suppress add <email>       # do-not-contact list
+    coldforge stats [name] [--by ...]    # results, incl. per template/variant
     coldforge doctor <domain>            # SPF/DKIM/DMARC deliverability
     coldforge mcp                        # run the MCP server (any MCP client)
 """
@@ -43,10 +48,15 @@ templates_app = typer.Typer(help="Browse the template pack.", no_args_is_help=Tr
 leads_app = typer.Typer(help="Manage outreach targets.", no_args_is_help=True)
 campaign_app = typer.Typer(help="Build and run sequenced campaigns.", no_args_is_help=True)
 reply_app = typer.Typer(help="Record / detect replies.", no_args_is_help=True)
+icp_app = typer.Typer(help="Ideal Customer Profile: build from your site, then score leads.",
+                      no_args_is_help=True)
+suppress_app = typer.Typer(help="Do-not-contact list.", no_args_is_help=True)
 app.add_typer(templates_app, name="templates")
 app.add_typer(leads_app, name="leads")
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(reply_app, name="reply")
+app.add_typer(icp_app, name="icp")
+app.add_typer(suppress_app, name="suppress")
 
 
 def _make_console() -> Console:
@@ -217,19 +227,124 @@ def leads_import(
 
 @leads_app.command("list")
 def leads_list() -> None:
-    """List stored leads."""
+    """List stored leads (best fit first once scored)."""
     with _store() as store:
         leads = store.list_leads()
     if not leads:
         console.print("[yellow]No leads yet.[/] Import some: coldforge leads import leads.csv")
         return
+    leads.sort(key=lambda ld: (ld.fit_score is None, -(ld.fit_score or 0), ld.id or 0))
     table = Table(show_lines=False)
-    for col in ("id", "email", "name", "company", "title"):
+    for col in ("id", "email", "name", "company", "title", "fit", "verify"):
         table.add_column(col)
     for ld in leads:
         name = " ".join(p for p in (ld.first_name, ld.last_name) if p)
-        table.add_row(str(ld.id), ld.email, name, ld.company, ld.title)
+        fit = "" if ld.fit_score is None else str(ld.fit_score)
+        verify = {"ok": "[green]ok[/]", "risky": "[yellow]risky[/]",
+                  "invalid": "[red]invalid[/]"}.get(ld.verify_status, "")
+        table.add_row(str(ld.id), ld.email, name, ld.company, ld.title, fit, verify)
     console.print(table)
+
+
+@leads_app.command("verify")
+def leads_verify(
+    lead: str = typer.Argument("", help="Lead id / email. Omit to verify every lead."),
+    no_mx: bool = typer.Option(False, "--no-mx", help="Skip the network MX lookup."),
+) -> None:
+    """Check syntax / disposable domains / role accounts / MX; store the verdict.
+
+    Invalid addresses are excluded from scheduling and sending automatically.
+    """
+    from .verify import verify_email
+
+    with _store() as store:
+        targets = [store.find_lead(lead)] if lead else store.list_leads()
+        targets = [t for t in targets if t]
+        if not targets:
+            _err("No matching lead. Import some first: coldforge leads import leads.csv")
+        counts = {"ok": 0, "risky": 0, "invalid": 0}
+        for ld in targets:
+            r = verify_email(ld.email, check_mx=not no_mx)
+            store.set_verify_status(ld.id, r.status)  # type: ignore[arg-type]
+            counts[r.status] += 1
+            mark = {"ok": "[green]✓[/]", "risky": "[yellow]~[/]", "invalid": "[red]✗[/]"}[r.status]
+            detail = f" [dim]{'; '.join(r.reasons)}[/]" if r.reasons else ""
+            console.print(f"{mark} [cyan]{ld.email}[/] {r.status}{detail}")
+    console.print(f"\n[green]{counts['ok']} ok[/] · [yellow]{counts['risky']} risky[/] · "
+                  f"[red]{counts['invalid']} invalid[/] (invalid are never sent to)")
+
+
+@leads_app.command("score")
+def leads_score(
+    lead: str = typer.Argument("", help="Lead id / email. Omit to score every lead."),
+) -> None:
+    """Score leads 0–100 against the stored ICP (build one first: coldforge icp build)."""
+    from .icp import load_icp, score_lead
+
+    settings = get_settings()
+    icp = load_icp(settings)
+    if not icp:
+        _err("No ICP yet. Build one first: coldforge icp build --site your-site.com")
+    with _store() as store:
+        targets = [store.find_lead(lead)] if lead else store.list_leads()
+        targets = [t for t in targets if t]
+        if not targets:
+            _err("No matching lead.")
+        for ld in targets:
+            signal = next(iter(store.signals_for(ld.id)), None) if ld.id else None
+            score, reason = score_lead(ld, icp, signal_text=signal.text if signal else "",
+                                       settings=settings)
+            store.set_fit(ld.id, score, reason)  # type: ignore[arg-type]
+            color = "green" if score >= 70 else ("yellow" if score >= 40 else "red")
+            console.print(f"[{color}]{score:>3}[/] [cyan]{ld.email}[/] [dim]{reason}[/]")
+    console.print("\n[dim]Ranked view: coldforge leads list[/]")
+
+
+# ── icp ──────────────────────────────────────────────────────────────────────
+@icp_app.command("build")
+def icp_build(
+    site: str = typer.Option(..., "--site", "-s", help="Your product site, e.g. acme.io"),
+) -> None:
+    """Read your own site and derive an ICP: product, pains, buyer segments.
+
+    An LLM writes the profile when ANTHROPIC_API_KEY is set; otherwise a local
+    keyword profile is extracted. The result is a plain JSON file you can edit.
+    """
+    from .icp import build_icp, save_icp
+
+    settings = get_settings()
+    try:
+        icp = build_icp(site, settings)
+    except ValueError as e:
+        _err(str(e))
+    path = save_icp(icp, settings)
+    console.print(Panel.fit(
+        f"[bold]{icp.get('site')}[/] [dim]({icp.get('source')})[/]\n\n"
+        f"{(icp.get('product') or '')[:400]}",
+        title="ICP", border_style="green",
+    ))
+    if icp.get("segments"):
+        table = Table(title="Who buys it", show_lines=False)
+        for col in ("segment", "fit", "why"):
+            table.add_column(col, overflow="fold")
+        for seg in icp["segments"]:
+            table.add_row(str(seg.get("name", "")), str(seg.get("fit", "")),
+                          str(seg.get("why", "")))
+        console.print(table)
+    console.print(f"[dim]Saved to {path} — edit freely. "
+                  f"Next: coldforge leads score[/]")
+
+
+@icp_app.command("show")
+def icp_show() -> None:
+    """Print the stored ICP."""
+    from .icp import icp_path, load_icp
+
+    icp = load_icp()
+    if not icp:
+        _err("No ICP yet. Build one: coldforge icp build --site your-site.com")
+    console.print_json(data=icp)
+    console.print(f"[dim]{icp_path()}[/]")
 
 
 # ── research ─────────────────────────────────────────────────────────────────
@@ -287,6 +402,48 @@ def draft(
                         title=f"draft · {d.template_id}", border_style="blue"))
     if d.notes:
         console.print(f"[dim]{d.notes}[/]")
+
+
+# ── lint ─────────────────────────────────────────────────────────────────────
+@app.command()
+def lint(
+    lead: str = typer.Option("", "--lead", "-l", help="Lead id / email to render for."),
+    template: str = typer.Option("", "--template", "-t", help="Template id to render."),
+    subject: str = typer.Option("", "--subject", help="Or lint raw copy: the subject."),
+    body: str = typer.Option("", "--body", help="Or lint raw copy: the body."),
+) -> None:
+    """Spam-filter check an email before it sends (trigger words, links, caps…).
+
+    Either render a template for a lead (--lead + --template) or pass raw copy
+    (--subject + --body). Score < 70 means: rewrite before sending.
+    """
+    from .lint import lint_draft
+
+    if template:
+        from .personalize import draft_email
+
+        settings = get_settings()
+        with _store() as store:
+            ld = store.find_lead(lead) if lead else None
+            if lead and not ld:
+                _err(f"Lead '{lead}' not found.")
+            ld = ld or Lead(email="preview@example.com")
+            signal = next(iter(store.signals_for(ld.id)), None) if ld.id else None
+            d = draft_email(template, ld, signal=signal, settings=settings,
+                            force_template_fill=True)
+        subject, body = d.subject, d.body
+    elif not (subject or body):
+        _err("Pass --template (with optional --lead), or --subject/--body.")
+
+    report = lint_draft(subject, body)
+    for issue in report.issues:
+        mark = "[red]✗[/]" if issue.severity == "block" else "[yellow]![/]"
+        console.print(f"{mark} {issue.message}")
+    color = "green" if report.ok else "red"
+    verdict = "clean enough to send" if report.ok else "rewrite before sending"
+    console.print(f"Score: [bold {color}]{report.score}/100[/] — {verdict}")
+    if not report.ok:
+        raise typer.Exit(1)
 
 
 # ── campaign ─────────────────────────────────────────────────────────────────
@@ -415,6 +572,7 @@ def tick(
     else:
         console.print(f"[green]✓[/] Sent [bold]{len(result.sent)}[/]. "
                       f"Skipped (replied): {len(result.skipped_replied)}, "
+                      f"skipped (suppressed/invalid): {len(result.skipped_suppressed)}, "
                       f"canceled follow-ups: {result.canceled}.")
     if result.held_window:
         console.print("[dim]Held: outside send window/days.[/]")
@@ -424,17 +582,37 @@ def tick(
 
 # ── replies ──────────────────────────────────────────────────────────────────
 @reply_app.command("mark")
-def reply_mark(lead: str = typer.Argument(..., help="Lead id / email that replied.")) -> None:
-    """Record a reply manually — cancels that lead's pending follow-ups."""
+def reply_mark(
+    lead: str = typer.Argument(..., help="Lead id / email that replied."),
+    category: str = typer.Option("", "--category", "-c",
+                                 help="interested | not_interested | unsubscribe | ooo | other"),
+    text: str = typer.Option("", "--text", help="Paste the reply to auto-classify it."),
+) -> None:
+    """Record a reply manually — cancels that lead's pending follow-ups.
+
+    Pass --text to auto-classify, or --category to set it yourself. An
+    'unsubscribe' lands the address on the suppression list immediately.
+    """
+    from .replies import CATEGORIES, classify_reply
+
+    if category and category not in CATEGORIES:
+        _err(f"Unknown category '{category}'. One of: {', '.join(CATEGORIES)}")
+    if not category and text:
+        category = classify_reply("", text, get_settings())
     with _store() as store:
         ld = store.find_lead(lead)
         if not ld or ld.id is None:
             _err(f"Lead '{lead}' not found.")
-        store.record_reply(ld.id, None, source="manual")
+        store.record_reply(ld.id, None, source="manual", category=category)
+        if category == "unsubscribe":
+            store.suppress(ld.email, reason="reply asked to stop")
         canceled = 0
         for c in store.list_campaigns():
             canceled += store.cancel_pending_for_lead(c.id, ld.id)  # type: ignore[arg-type]
-    console.print(f"[green]✓[/] Recorded reply from {ld.email}; canceled {canceled} pending follow-ups.")
+    label = f" [dim]({category})[/]" if category else ""
+    console.print(f"[green]✓[/] Recorded reply from {ld.email}{label}; "
+                  f"canceled {canceled} pending follow-ups."
+                  + (" Added to suppression list." if category == "unsubscribe" else ""))
 
 
 @reply_app.command("scan")
@@ -450,15 +628,95 @@ def reply_scan() -> None:
     console.print(f"[green]✓[/] Recorded [bold]{n}[/] new replies.")
 
 
+# ── suppressions ─────────────────────────────────────────────────────────────
+@suppress_app.command("add")
+def suppress_add(
+    email: str = typer.Argument(..., help="Address to never contact again."),
+    reason: str = typer.Option("", "--reason", help="Why (kept for your records)."),
+) -> None:
+    """Add an address to the do-not-contact list; pending sends are canceled."""
+    with _store() as store:
+        store.suppress(email, reason)
+        canceled = 0
+        ld = store.find_lead(email)
+        if ld and ld.id is not None:
+            for c in store.list_campaigns():
+                canceled += store.cancel_pending_for_lead(c.id, ld.id)  # type: ignore[arg-type]
+    console.print(f"[green]✓[/] Suppressed {email.strip().lower()}"
+                  + (f"; canceled {canceled} pending sends." if canceled else "."))
+
+
+@suppress_app.command("remove")
+def suppress_remove(email: str = typer.Argument(...)) -> None:
+    """Remove an address from the do-not-contact list."""
+    with _store() as store:
+        removed = store.unsuppress(email)
+    if removed:
+        console.print(f"[green]✓[/] Removed {email.strip().lower()}.")
+    else:
+        console.print(f"[yellow]∅[/] {email.strip().lower()} was not suppressed.")
+
+
+@suppress_app.command("list")
+def suppress_list() -> None:
+    """Show the do-not-contact list."""
+    with _store() as store:
+        rows = store.list_suppressions()
+    if not rows:
+        console.print("[dim]Suppression list is empty.[/]")
+        return
+    table = Table(show_lines=False)
+    for col in ("email", "reason", "since"):
+        table.add_column(col, overflow="fold")
+    for email, reason, created in rows:
+        table.add_row(email, reason, created[:10])
+    console.print(table)
+
+
 # ── stats ────────────────────────────────────────────────────────────────────
 @app.command()
-def stats(name: str = typer.Argument("", help="Campaign name (omit for all).")) -> None:
-    """Show send / reply counts."""
+def stats(
+    name: str = typer.Argument("", help="Campaign name (omit for all)."),
+    by: str = typer.Option("", "--by", help="Break down by 'template' or 'variant' "
+                                            "to see what earns replies."),
+) -> None:
+    """Show send / reply counts — overall, or per template/variant with --by."""
+    if by and by not in ("template", "variant"):
+        _err("--by must be 'template' or 'variant'.")
     with _store() as store:
         campaigns = ([store.get_campaign(name)] if name else store.list_campaigns())
         campaigns = [c for c in campaigns if c]
         if not campaigns:
             _err("No campaigns found.")
+
+        if by:
+            # Which copy earns replies: group sent messages, attribute a lead's
+            # reply to every group that actually reached them.
+            groups: dict[str, dict[str, set[int]]] = {}
+            for c in campaigns:
+                for m in store.messages_for_campaign(c.id):  # type: ignore[arg-type]
+                    if m.status != "sent":
+                        continue
+                    key = (m.template_id if by == "template" else m.variant) or "—"
+                    g = groups.setdefault(key, {"sent_to": set(), "replied": set()})
+                    g["sent_to"].add(m.lead_id)
+                    if store.has_replied(m.lead_id, m.campaign_id):
+                        g["replied"].add(m.lead_id)
+            if not groups:
+                console.print("[yellow]Nothing sent yet.[/]")
+                return
+            table = Table(title=f"by {by}", show_lines=False)
+            for col in (by, "leads reached", "replied", "reply %"):
+                table.add_column(col)
+            ranked = sorted(groups.items(),
+                            key=lambda kv: -(len(kv[1]["replied"]) / max(1, len(kv[1]["sent_to"]))))
+            for key, g in ranked:
+                n, r = len(g["sent_to"]), len(g["replied"])
+                table.add_row(key, str(n), str(r), f"{r / n * 100:.0f}%" if n else "—")
+            console.print(table)
+            console.print("[dim]Double down on the top row; retire the bottom one.[/]")
+            return
+
         table = Table(show_lines=False)
         for col in ("campaign", "scheduled", "sent", "replied", "skipped", "reply %"):
             table.add_column(col)
@@ -471,7 +729,11 @@ def stats(name: str = typer.Argument("", help="Campaign name (omit for all).")) 
             replied = sum(1 for lid in leads_in if store.has_replied(lid, c.id))
             rate = f"{(replied / len(leads_in) * 100):.0f}%" if leads_in else "—"
             table.add_row(c.name, str(scheduled), str(sent), str(replied), str(skipped), rate)
+        cats = store.reply_categories()
     console.print(table)
+    if cats:
+        pretty = " · ".join(f"{k}: {v}" for k, v in sorted(cats.items()))
+        console.print(f"[dim]replies — {pretty}[/]")
 
 
 # ── example file contents ────────────────────────────────────────────────────

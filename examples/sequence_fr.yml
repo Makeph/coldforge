@@ -1,0 +1,12 @@
+# Séquence française pour vendre aux agences (SEO / Ads / growth) :
+# ouverture sur la valeur invisible, une relance douce, un message de clôture.
+# Variables attendues dans le CSV : pain, outcome, observation, original_hook.
+- template: fr_agence_preuve
+  wait_days: 0
+  condition: always
+- template: fr_agence_relance
+  wait_days: 3
+  condition: no_reply
+- template: fr_agence_derniere_porte
+  wait_days: 7
+  condition: no_reply

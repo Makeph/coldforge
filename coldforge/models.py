@@ -24,6 +24,9 @@ class Lead:
     website: str = ""
     linkedin: str = ""
     custom: dict[str, str] = field(default_factory=dict)
+    fit_score: int | None = None   # 0–100 against the stored ICP (see icp.py)
+    fit_reason: str = ""
+    verify_status: str = ""        # "" | ok | risky | invalid  (see verify.py)
     id: int | None = None
 
     def as_vars(self) -> dict[str, str]:

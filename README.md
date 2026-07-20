@@ -47,6 +47,7 @@ rebuilt small and honest:
 | Web-search + scrape to personalize | `prospect-research-mcp` | `research` command + `research_prospect` MCP tool, zero-key DuckDuckGo fallback |
 | LLM-personalized emails | `ProspectAI` | ~150 lines, not 137k; **always** degrades to template fill |
 | Curated reply-driving templates, silent-reply follow-up, SPF/DKIM/DMARC check | `coldflow` | Original template pack + `doctor` + reply→cancel rule |
+| "Drop your site → learn who buys it", fit-scored segments, reply triage, learn-what-works | AutoGTM tools (`explee.com` & co) | `icp build` + `leads score`, `reply` classification, `stats --by template`, all local and editable |
 
 Everything **degrades gracefully**: no `ANTHROPIC_API_KEY` → deterministic
 template fill; no Tavily key → DuckDuckGo + site scrape; no SMTP → dry-run
@@ -68,13 +69,18 @@ only. You can run the entire pipeline end-to-end with an empty `.env`.
 ### CLI
 
 ```bash
+coldforge icp build --site acme.io       # read YOUR site → who buys it (editable JSON)
+coldforge leads verify                   # syntax / disposable / MX — invalid never sends
+coldforge leads score                    # rank every lead 0–100 against the ICP
 coldforge templates list                 # browse the pack
 coldforge templates show sales_pain_point
 coldforge research alex@acme.io          # store a personalization signal
 coldforge draft -l alex@acme.io -t sales_pain_point --research
+coldforge lint -l alex@acme.io -t sales_pain_point   # spam-filter check the copy
 coldforge doctor acme.io                 # SPF / DKIM / DMARC, 0–100 score
-coldforge reply mark alex@acme.io        # records a reply → cancels follow-ups
-coldforge stats q3
+coldforge reply mark alex@acme.io --text "pas intéressé"   # auto-classified
+coldforge suppress add cto@acme.io       # do-not-contact list, honoured everywhere
+coldforge stats q3 --by template         # which copy earns replies → double down
 ```
 
 ### MCP (drive it from any MCP client)
@@ -95,9 +101,10 @@ Register it with your MCP client:
 ```
 
 Tools exposed: `research_prospect`, `draft_email`, `list_templates`,
-`show_template`, `check_deliverability`. Now you can ask your assistant
-*"research Alex at Acme and draft a pain-point cold email"* and it uses the
-same engine the CLI does.
+`show_template`, `check_deliverability`, `build_icp`, `score_prospect`,
+`lint_email`, `classify_reply`. Now you can ask your assistant *"research Alex
+at Acme and draft a pain-point cold email"* and it uses the same engine the
+CLI does.
 
 ## Sequences
 
@@ -122,6 +129,11 @@ guardrails:
 - **Jittered pacing** — randomised gap between real sends.
 - **Reply → cancel** — a `no_reply` step is skipped and the rest of that lead's
   sequence canceled the moment a reply is recorded (manually or via IMAP).
+- **Suppression list** — `coldforge suppress add` (or any reply classified as an
+  unsubscribe) removes an address from every current and future sequence, and
+  every real send carries a `List-Unsubscribe` header.
+- **Verification gate** — leads marked `invalid` by `leads verify` are never
+  scheduled and never sent to.
 
 ```bash
 # typical cron line — runs the worker every 15 min during the day
@@ -140,12 +152,40 @@ Everything is optional — copy `.env.example` to `.env` and fill what you need.
 | `IMAP_*` | auto-detect replies | mark replies manually |
 | `COLDFORGE_DAILY_LIMIT` / `SEND_WINDOW` / `SEND_DAYS` | guardrails | sane defaults |
 
+## Target the right people (ICP + scoring)
+
+The AutoGTM idea — *"drop your site, learn who buys it"* — reduced to its
+honest core, running on your machine:
+
+```bash
+coldforge icp build --site acme.io          # scrape your own site → ICP
+coldforge leads score                       # every lead scored 0–100 + why
+coldforge leads list                        # ranked, best fit first
+```
+
+The ICP is a plain JSON file (`~/.coldforge/icp.json`) with the product
+summary, the pains it removes, ranked buyer segments and match keywords — the
+model proposes, you edit. With `ANTHROPIC_API_KEY` set, an LLM writes the
+profile and judges each lead; without it, a deterministic keyword heuristic
+keeps ranking usable offline.
+
+## Reply triage
+
+Replies aren't binary. Each one (IMAP scan or `reply mark --text "…"`) is
+classified — **interested · not_interested · unsubscribe · ooo · other** —
+in French and English. Unsubscribes land on the suppression list instantly;
+`stats` shows the category breakdown, and `stats --by template` tells you which
+copy actually earns replies so you can double down and retire the rest.
+
 ## Templates
 
-Nine curated, plaintext, reply-tested templates across **sales, recruiting,
-partnership, warm-intro, networking, follow-up** — each under ~120 words with
-one CTA and deliverability notes baked into the front-matter. Add your own by
-dropping a `.md` file into `~/.coldforge/templates/`.
+Twelve curated, plaintext, reply-tested templates across **sales, sales-fr,
+recruiting, partnership, warm-intro, networking, follow-up** — each under ~120
+words with one CTA and deliverability notes baked into the front-matter. The
+`sales-fr` pack is a three-touch French sequence for selling to agencies
+(opener → soft bump → breakup, see `examples/sequence_fr.yml`), with CNIL-style
+B2B compliance notes. Add your own by dropping a `.md` file into
+`~/.coldforge/templates/`.
 
 ## Install from source
 

@@ -108,6 +108,9 @@ def schedule_campaign(
     for lead in leads:
         if lead.id is None:
             continue
+        # Never enroll someone who opted out or whose address can't receive mail.
+        if store.is_suppressed(lead.email) or lead.verify_status == "invalid":
+            continue
         signal = next(iter(store.signals_for(lead.id)), None)
         cumulative = 0
         for step_idx, step in enumerate(sequence):
@@ -133,6 +136,7 @@ class TickResult:
     def __init__(self) -> None:
         self.sent: list[Message] = []
         self.skipped_replied: list[Message] = []
+        self.skipped_suppressed: list[Message] = []
         self.canceled: int = 0
         self.held_limit: int = 0
         self.held_window: bool = False
@@ -141,6 +145,7 @@ class TickResult:
         return {
             "sent": len(self.sent),
             "skipped_replied": len(self.skipped_replied),
+            "skipped_suppressed": len(self.skipped_suppressed),
             "canceled": self.canceled,
             "held_for_daily_limit": self.held_limit,
             "outside_send_window": self.held_window,
@@ -182,6 +187,14 @@ def tick(store: Store, settings: Settings, sender, *, now: datetime | None = Non
         lead = store.get_lead(msg.lead_id)
         if lead is None:
             store.mark_message(msg.id, "failed", error="lead missing")  # type: ignore[arg-type]
+            continue
+
+        # Suppression list and invalid addresses win over everything else —
+        # cancel the lead's whole remaining sequence, not just this step.
+        if store.is_suppressed(lead.email) or lead.verify_status == "invalid":
+            store.mark_message(msg.id, "skipped")  # type: ignore[arg-type]
+            result.skipped_suppressed.append(msg)
+            result.canceled += store.cancel_pending_for_lead(msg.campaign_id, msg.lead_id)
             continue
 
         if dry_run:

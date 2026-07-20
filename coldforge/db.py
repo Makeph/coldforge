@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS leads (
     website     TEXT DEFAULT '',
     linkedin    TEXT DEFAULT '',
     custom      TEXT DEFAULT '{}',
+    fit_score   INTEGER,
+    fit_reason  TEXT DEFAULT '',
+    verify_status TEXT DEFAULT '',
     created_at  TEXT NOT NULL
 );
 
@@ -66,7 +69,14 @@ CREATE TABLE IF NOT EXISTS replies (
     lead_id      INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
     campaign_id  INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
     detected_at  TEXT NOT NULL,
-    source       TEXT DEFAULT 'manual'
+    source       TEXT DEFAULT 'manual',
+    category     TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS suppressions (
+    email       TEXT PRIMARY KEY,
+    reason      TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_due
@@ -93,7 +103,24 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first release to pre-existing DBs.
+        SQLite's CREATE IF NOT EXISTS skips existing tables, so new columns in
+        SCHEMA never reach an old file without this."""
+        lead_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(leads)")}
+        for name, ddl in (
+            ("fit_score", "fit_score INTEGER"),
+            ("fit_reason", "fit_reason TEXT DEFAULT ''"),
+            ("verify_status", "verify_status TEXT DEFAULT ''"),
+        ):
+            if name not in lead_cols:
+                self.conn.execute(f"ALTER TABLE leads ADD COLUMN {ddl}")
+        reply_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(replies)")}
+        if "category" not in reply_cols:
+            self.conn.execute("ALTER TABLE replies ADD COLUMN category TEXT DEFAULT ''")
 
     def close(self) -> None:
         self.conn.close()
@@ -149,6 +176,17 @@ class Store:
         rows = self.conn.execute("SELECT * FROM leads ORDER BY id").fetchall()
         return [self._row_to_lead(r) for r in rows]
 
+    def set_fit(self, lead_id: int, score: int, reason: str = "") -> None:
+        self.conn.execute(
+            "UPDATE leads SET fit_score=?, fit_reason=? WHERE id=?",
+            (score, reason, lead_id),
+        )
+        self.conn.commit()
+
+    def set_verify_status(self, lead_id: int, status: str) -> None:
+        self.conn.execute("UPDATE leads SET verify_status=? WHERE id=?", (status, lead_id))
+        self.conn.commit()
+
     @staticmethod
     def _row_to_lead(row: sqlite3.Row) -> Lead:
         return Lead(
@@ -156,6 +194,8 @@ class Store:
             last_name=row["last_name"], company=row["company"], title=row["title"],
             website=row["website"], linkedin=row["linkedin"],
             custom=json.loads(row["custom"] or "{}"),
+            fit_score=row["fit_score"], fit_reason=row["fit_reason"] or "",
+            verify_status=row["verify_status"] or "",
         )
 
     # ── signals ────────────────────────────────────────────────────────────
@@ -286,10 +326,12 @@ class Store:
         )
 
     # ── replies ────────────────────────────────────────────────────────────
-    def record_reply(self, lead_id: int, campaign_id: int | None, source: str = "manual") -> None:
+    def record_reply(self, lead_id: int, campaign_id: int | None, source: str = "manual",
+                     category: str = "") -> None:
         self.conn.execute(
-            "INSERT INTO replies(lead_id,campaign_id,detected_at,source) VALUES(?,?,?,?)",
-            (lead_id, campaign_id, _now(), source),
+            "INSERT INTO replies(lead_id,campaign_id,detected_at,source,category) "
+            "VALUES(?,?,?,?,?)",
+            (lead_id, campaign_id, _now(), source, category),
         )
         self.conn.commit()
 
@@ -305,3 +347,47 @@ class Store:
                 (lead_id, campaign_id),
             ).fetchone()
         return row is not None
+
+    def reply_categories(self, campaign_id: int | None = None) -> dict[str, int]:
+        """Count replies per triage category (see :mod:`coldforge.replies`)."""
+        if campaign_id is None:
+            rows = self.conn.execute(
+                "SELECT COALESCE(NULLIF(category,''),'unclassified') c, COUNT(*) "
+                "FROM replies GROUP BY c"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT COALESCE(NULLIF(category,''),'unclassified') c, COUNT(*) "
+                "FROM replies WHERE campaign_id=? OR campaign_id IS NULL GROUP BY c",
+                (campaign_id,),
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    # ── suppressions ───────────────────────────────────────────────────────
+    def suppress(self, email: str, reason: str = "") -> None:
+        """Add *email* to the do-not-contact list (idempotent)."""
+        self.conn.execute(
+            "INSERT INTO suppressions(email,reason,created_at) VALUES(?,?,?) "
+            "ON CONFLICT(email) DO NOTHING",
+            (email.strip().lower(), reason, _now()),
+        )
+        self.conn.commit()
+
+    def unsuppress(self, email: str) -> bool:
+        cur = self.conn.execute(
+            "DELETE FROM suppressions WHERE email=?", (email.strip().lower(),)
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def is_suppressed(self, email: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM suppressions WHERE email=?", (email.strip().lower(),)
+        ).fetchone()
+        return row is not None
+
+    def list_suppressions(self) -> list[tuple[str, str, str]]:
+        rows = self.conn.execute(
+            "SELECT email, reason, created_at FROM suppressions ORDER BY created_at"
+        ).fetchall()
+        return [(r["email"], r["reason"], r["created_at"]) for r in rows]
