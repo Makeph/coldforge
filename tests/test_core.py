@@ -266,6 +266,13 @@ def test_icp_heuristic_build_and_score(settings):
     assert "matches:" in fit_reason
 
 
+def test_icp_heuristic_has_empty_content_gaps():
+    from coldforge.icp import _heuristic_icp
+
+    icp = _heuristic_icp("acme.fr", "Some product text about agencies and reporting.")
+    assert icp["content_gaps"] == []
+
+
 def test_icp_save_load_roundtrip(settings):
     from coldforge.icp import load_icp, save_icp
 
@@ -300,6 +307,69 @@ def test_migration_adds_columns_to_old_db(tmp_path):
     again = s.find_lead("old@x.io")
     assert again.fit_score == 80 and again.verify_status == "ok"
     s.close()
+
+
+# ── geo (AI-answer-engine visibility, offline) ───────────────────────────────
+def test_geo_check_visibility_no_engines_configured(settings):
+    from coldforge.geo import check_visibility
+
+    assert check_visibility("best crm for real estate agents", "acme", settings) == []
+
+
+def test_geo_engines_empty_without_keys(settings):
+    assert settings.geo_engines == []
+
+
+def test_geo_mentions_and_snippet():
+    from coldforge.geo import _mentions, _snippet
+
+    text = "Many tools exist. Acme is the leader for agencies. Others lag behind."
+    assert _mentions(text, "Acme")
+    assert not _mentions(text, "Northwind")
+    assert "Acme is the leader" in _snippet(text, "Acme")
+    assert _snippet(text, "Northwind") == "Many tools exist."
+
+
+# ── content planning (offline, heuristic path) ───────────────────────────────
+def test_content_plan_heuristic_uses_gaps_and_keywords(settings):
+    from coldforge.content import plan_content
+
+    icp = {
+        "site": "acme.fr", "keywords": ["reporting", "agences", "seo", "ads", "budget", "tracking"],
+        "content_gaps": [{"topic": "comment prouver son travail SEO", "why": "cherché par les agences"}],
+    }
+    briefs = plan_content(icp, count=2, settings=settings)
+    assert len(briefs) == 2
+    assert briefs[0].topic == "comment prouver son travail SEO"
+    assert briefs[0].status == "planned"
+    assert all(b.id for b in briefs)
+
+
+def test_content_plan_heuristic_without_gaps_chunks_keywords(settings):
+    from coldforge.content import plan_content
+
+    icp = {"site": "acme.fr", "keywords": ["a", "b", "c", "d", "e", "f"], "content_gaps": []}
+    briefs = plan_content(icp, count=3, settings=settings)
+    assert len(briefs) == 2  # only 2 chunks of 3 fit in 6 keywords
+    assert briefs[0].keywords == ["a", "b", "c"]
+
+
+def test_content_plan_save_load_roundtrip(settings):
+    from coldforge.content import ContentBrief, load_plan, save_plan
+
+    briefs = [ContentBrief(id="01-x", topic="X", keywords=["x"], angle="a")]
+    save_plan(briefs, settings)
+    loaded = load_plan(settings)
+    assert loaded == briefs
+
+
+def test_content_draft_heuristic_fallback(settings):
+    from coldforge.content import ContentBrief, draft_article
+
+    brief = ContentBrief(id="01-x", topic="X topic", keywords=["x", "y"], angle="an angle")
+    draft_article(brief, {"site": "acme.fr"}, settings, force_heuristic=True)
+    assert brief.status == "drafted"
+    assert "X topic" in brief.body and "an angle" in brief.body
 
 
 # ── French template pack ─────────────────────────────────────────────────────

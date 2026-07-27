@@ -95,6 +95,13 @@ class Settings:
     send_window: tuple[time, time]
     send_days: set[int] = field(default_factory=lambda: {0, 1, 2, 3, 4})
     min_gap_seconds: int = 45
+    # geo — AI-answer-engine visibility (see geo.py), each optional/independent
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    perplexity_api_key: str | None = None
+    perplexity_model: str = "sonar"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
 
     @property
     def can_send(self) -> bool:
@@ -107,6 +114,20 @@ class Settings:
     @property
     def has_ai(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def geo_engines(self) -> list[str]:
+        """Which AI-answer engines are configured for `coldforge geo check`."""
+        engines = []
+        if self.anthropic_api_key:
+            engines.append("claude")
+        if self.openai_api_key:
+            engines.append("openai")
+        if self.perplexity_api_key:
+            engines.append("perplexity")
+        if self.gemini_api_key:
+            engines.append("gemini")
+        return engines
 
 
 def get_settings() -> Settings:
@@ -137,4 +158,10 @@ def get_settings() -> Settings:
         send_window=_parse_window(os.environ.get("COLDFORGE_SEND_WINDOW", "09:00-17:00")),
         send_days=_parse_days(os.environ.get("COLDFORGE_SEND_DAYS", "mon-fri")),
         min_gap_seconds=int(os.environ.get("COLDFORGE_MIN_GAP_SECONDS", "45") or 45),
+        openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
+        openai_model=os.environ.get("COLDFORGE_OPENAI_MODEL", "gpt-4o-mini"),
+        perplexity_api_key=os.environ.get("PERPLEXITY_API_KEY") or None,
+        perplexity_model=os.environ.get("COLDFORGE_PERPLEXITY_MODEL", "sonar"),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY") or None,
+        gemini_model=os.environ.get("COLDFORGE_GEMINI_MODEL", "gemini-2.0-flash"),
     )

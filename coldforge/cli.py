@@ -17,6 +17,9 @@
     coldforge suppress add <email>       # do-not-contact list
     coldforge stats [name] [--by ...]    # results, incl. per template/variant
     coldforge doctor <domain>            # SPF/DKIM/DMARC deliverability
+    coldforge geo check --query "..."    # are you mentioned by ChatGPT/Claude/Perplexity/Gemini?
+    coldforge content plan               # cluster the ICP's keyword gaps into article briefs
+    coldforge content draft <id>         # write one article (AI if key set)
     coldforge mcp                        # run the MCP server (any MCP client)
 """
 
@@ -35,7 +38,7 @@ from rich.table import Table
 from . import __version__
 from .config import get_settings
 from .db import Store
-from .models import Campaign, Lead
+from .models import Campaign, Lead, Signal
 from .research import research_lead
 
 app = typer.Typer(
@@ -51,12 +54,19 @@ reply_app = typer.Typer(help="Record / detect replies.", no_args_is_help=True)
 icp_app = typer.Typer(help="Ideal Customer Profile: build from your site, then score leads.",
                       no_args_is_help=True)
 suppress_app = typer.Typer(help="Do-not-contact list.", no_args_is_help=True)
+geo_app = typer.Typer(help="AI-answer-engine visibility (GEO): are you mentioned when a "
+                          "buyer asks ChatGPT / Claude / Perplexity / Gemini?",
+                     no_args_is_help=True)
+content_app = typer.Typer(help="SEO/GEO content: cluster the ICP's keyword gaps into "
+                              "article briefs, then draft them.", no_args_is_help=True)
 app.add_typer(templates_app, name="templates")
 app.add_typer(leads_app, name="leads")
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(reply_app, name="reply")
 app.add_typer(icp_app, name="icp")
 app.add_typer(suppress_app, name="suppress")
+app.add_typer(geo_app, name="geo")
+app.add_typer(content_app, name="content")
 
 
 def _make_console() -> Console:
@@ -331,6 +341,14 @@ def icp_build(
             table.add_row(str(seg.get("name", "")), str(seg.get("fit", "")),
                           str(seg.get("why", "")))
         console.print(table)
+    if icp.get("content_gaps"):
+        table = Table(title="Content/SEO gaps", show_lines=False)
+        for col in ("topic", "why"):
+            table.add_column(col, overflow="fold")
+        for gap in icp["content_gaps"]:
+            table.add_row(str(gap.get("topic", "")), str(gap.get("why", "")))
+        console.print(table)
+        console.print("[dim]Turn these into articles: coldforge content plan[/]")
     console.print(f"[dim]Saved to {path} — edit freely. "
                   f"Next: coldforge leads score[/]")
 
@@ -671,6 +689,145 @@ def suppress_list() -> None:
     for email, reason, created in rows:
         table.add_row(email, reason, created[:10])
     console.print(table)
+
+
+# ── geo (AI-answer-engine visibility) ────────────────────────────────────────
+@geo_app.command("check")
+def geo_check(
+    query: str = typer.Option("", "--query", "-q",
+                              help="Buyer question to ask (default: derived from the ICP)."),
+    brand: str = typer.Option("", "--brand", "-b",
+                              help="Your brand/domain to look for (default: the ICP site)."),
+    lead: str = typer.Option("", "--lead", "-l",
+                             help="Save the result as research signal(s) on this lead."),
+) -> None:
+    """Ask every configured AI engine a buyer question and see who gets mentioned.
+
+    Configure at least one of ANTHROPIC_API_KEY / OPENAI_API_KEY /
+    PERPLEXITY_API_KEY / GEMINI_API_KEY — engines without a key are skipped.
+    """
+    from .geo import check_visibility
+    from .icp import load_icp
+
+    settings = get_settings()
+    icp = load_icp(settings)
+    if not query:
+        if not icp or not icp.get("segments"):
+            _err("Pass --query, or build an ICP first: coldforge icp build --site your-site.com")
+        query = f"What are the best tools or providers for {icp['segments'][0].get('name', '')}?"
+    if not brand:
+        if not icp or not icp.get("site"):
+            _err("Pass --brand, or build an ICP first: coldforge icp build --site your-site.com")
+        brand = icp["site"].split("//")[-1].split("/")[0].split(".")[0]
+
+    results = check_visibility(query, brand, settings)
+    if not results:
+        _err("No GEO engine configured. Set one of ANTHROPIC_API_KEY / OPENAI_API_KEY / "
+             "PERPLEXITY_API_KEY / GEMINI_API_KEY.")
+
+    table = Table(title=f'"{query}" — looking for "{brand}"', show_lines=False)
+    for col in ("engine", "mentioned", "excerpt"):
+        table.add_column(col, overflow="fold")
+    for r in results:
+        mark = "[green]yes[/]" if r.mentioned else "[red]no[/]"
+        table.add_row(r.engine, mark, r.snippet)
+    console.print(table)
+
+    if lead:
+        with _store() as store:
+            ld = store.find_lead(lead)
+            if not ld or ld.id is None:
+                _err(f"Lead '{lead}' not found.")
+            for r in results:
+                store.add_signal(Signal(
+                    lead_id=ld.id,
+                    text=(f"When asked '{query}', {r.engine} "
+                          f"{'mentions' if r.mentioned else 'does NOT mention'} "
+                          f"{brand}: {r.snippet}"),
+                    source=f"geo:{r.engine}",
+                ))
+        console.print(f"[dim]Saved as {len(results)} research signal(s) on {lead}.[/]")
+
+
+# ── content (SEO/GEO article planning) ───────────────────────────────────────
+@content_app.command("plan")
+def content_plan_cmd(
+    count: int = typer.Option(6, "--count", "-n", help="How many article briefs to plan."),
+) -> None:
+    """Cluster the stored ICP's keywords / content_gaps into article briefs."""
+    from .content import plan_content, plan_path, save_plan
+    from .icp import load_icp
+
+    settings = get_settings()
+    icp = load_icp(settings)
+    if not icp:
+        _err("No ICP yet. Build one first: coldforge icp build --site your-site.com")
+    briefs = plan_content(icp, count, settings)
+    if not briefs:
+        _err("Nothing to plan — the ICP has no keywords yet.")
+    save_plan(briefs, settings)
+    table = Table(title="Content plan", show_lines=False)
+    for col in ("id", "topic", "keywords"):
+        table.add_column(col, overflow="fold")
+    for b in briefs:
+        table.add_row(b.id, b.topic, ", ".join(b.keywords))
+    console.print(table)
+    console.print(f"[dim]Saved to {plan_path(settings)}. "
+                  f"Next: coldforge content draft <id>[/]")
+
+
+@content_app.command("list")
+def content_list() -> None:
+    """Show the planned briefs and their draft status."""
+    from .content import load_plan
+
+    briefs = load_plan()
+    if not briefs:
+        _err("No content plan yet. Run: coldforge content plan")
+    table = Table(show_lines=False)
+    for col in ("id", "status", "topic", "keywords"):
+        table.add_column(col, overflow="fold")
+    for b in briefs:
+        table.add_row(b.id, b.status, b.topic, ", ".join(b.keywords))
+    console.print(table)
+
+
+@content_app.command("draft")
+def content_draft(
+    brief_id: str = typer.Argument(..., help="Brief id from `coldforge content plan`."),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Force the deterministic skeleton."),
+) -> None:
+    """Write one article from a brief (LLM if a key is set, else a skeleton outline)."""
+    from .content import draft_article, find_brief, load_plan, save_plan
+    from .icp import load_icp
+
+    settings = get_settings()
+    icp = load_icp(settings) or {}
+    brief = find_brief(brief_id, settings)
+    if not brief:
+        _err(f"Brief '{brief_id}' not found. Run: coldforge content list")
+    draft_article(brief, icp, settings, force_heuristic=no_ai)
+    briefs = [brief if b.id == brief.id else b for b in load_plan(settings)]
+    save_plan(briefs, settings)
+    console.print(Panel(brief.body, title=f"draft · {brief.id}", border_style="blue"))
+    console.print(f"[dim]Saved into the content plan. Next: coldforge content show {brief.id}[/]")
+
+
+@content_app.command("show")
+def content_show(brief_id: str = typer.Argument(...)) -> None:
+    """Print a brief's metadata and drafted body (if any)."""
+    from .content import find_brief
+
+    brief = find_brief(brief_id)
+    if not brief:
+        _err(f"Brief '{brief_id}' not found.")
+    meta = (f"[bold]{brief.topic}[/]  [dim]({brief.id} · {brief.status})[/]\n"
+            f"[dim]angle:[/] {brief.angle}\n[dim]keywords:[/] {', '.join(brief.keywords)}")
+    console.print(Panel(meta, border_style="cyan"))
+    if brief.body:
+        console.print(Panel(brief.body, title="article", border_style="blue"))
+    else:
+        console.print(f"[yellow]Not drafted yet.[/] Run: coldforge content draft {brief.id}")
 
 
 # ── stats ────────────────────────────────────────────────────────────────────

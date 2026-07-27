@@ -105,3 +105,31 @@ class Campaign:
     sequence: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=_utcnow)
     id: int | None = None
+
+
+@dataclass
+class GeoCheck:
+    """One AI-answer-engine's response to a buyer-style question — did it
+    mention the brand? See :mod:`coldforge.geo` (the GEO/AI-visibility idea
+    behind tools like BabyLoveGrowth, reduced to "ask the engine yourself")."""
+
+    engine: str             # "claude" | "openai" | "perplexity" | "gemini"
+    query: str
+    mentioned: bool
+    snippet: str = ""       # the sentence mentioning the brand (or the answer's gist)
+    answer: str = ""        # full raw answer, trimmed
+    checked_at: datetime = field(default_factory=_utcnow)
+
+
+@dataclass
+class ContentBrief:
+    """A planned SEO/GEO article: a keyword cluster turned into a topic you can
+    draft with :func:`coldforge.content.draft_article`."""
+
+    id: str
+    topic: str
+    keywords: list[str] = field(default_factory=list)
+    angle: str = ""
+    status: str = "planned"    # planned | drafted
+    body: str = ""
+    created_at: datetime = field(default_factory=_utcnow)

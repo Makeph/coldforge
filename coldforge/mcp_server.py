@@ -14,6 +14,9 @@ Tools
 * ``score_prospect(...)``                                → 0–100 fit vs the ICP
 * ``lint_email(subject, body)``                          → spam-filter content check
 * ``classify_reply(subject, body)``                      → reply triage category
+* ``geo_check_visibility(query, brand)``                 → mentioned by ChatGPT/Claude/Perplexity/Gemini?
+* ``plan_content(count?)``                                → ICP keyword gaps → article briefs
+* ``draft_article(brief_id)``                             → write one planned article
 
 Requires the ``mcp`` extra: ``pip install 'coldforge[mcp]'``.
 """
@@ -139,6 +142,53 @@ def _build_server():
         from .replies import classify_reply as _classify
 
         return {"category": _classify(subject, body, get_settings())}
+
+    @mcp.tool()
+    def geo_check_visibility(query: str, brand: str) -> dict:
+        """Ask every configured AI engine (Claude/OpenAI/Perplexity/Gemini,
+        whichever have an API key set) a buyer question and check whether
+        `brand` is mentioned in the answer — the GEO/AI-search-visibility idea
+        behind tools like BabyLoveGrowth, done by asking the engines directly."""
+        from .geo import check_visibility
+
+        results = check_visibility(query, brand, get_settings())
+        return {
+            "query": query, "brand": brand,
+            "results": [{"engine": r.engine, "mentioned": r.mentioned, "snippet": r.snippet}
+                        for r in results],
+        }
+
+    @mcp.tool()
+    def plan_content(count: int = 6) -> dict:
+        """Cluster the stored ICP's keywords/content_gaps into `count` SEO/GEO
+        article briefs (call build_icp first). Saved to
+        $COLDFORGE_HOME/content/plan.json; draft one with draft_article."""
+        from .content import plan_content as _plan_content
+        from .content import save_plan
+        from .icp import load_icp
+
+        icp = load_icp()
+        if not icp:
+            return {"error": "No ICP stored yet — call build_icp(site) first."}
+        briefs = _plan_content(icp, count, get_settings())
+        save_plan(briefs)
+        return {"briefs": [{"id": b.id, "topic": b.topic, "keywords": b.keywords,
+                            "angle": b.angle} for b in briefs]}
+
+    @mcp.tool()
+    def draft_article(brief_id: str) -> dict:
+        """Write one article from a brief planned by plan_content (LLM if
+        ANTHROPIC_API_KEY is set, else a skeleton outline)."""
+        from .content import draft_article as _draft_article
+        from .content import find_brief, load_plan, save_plan
+        from .icp import load_icp
+
+        brief = find_brief(brief_id)
+        if not brief:
+            return {"error": f"Brief '{brief_id}' not found — call plan_content first."}
+        _draft_article(brief, load_icp() or {}, get_settings())
+        save_plan([brief if b.id == brief.id else b for b in load_plan()])
+        return {"id": brief.id, "topic": brief.topic, "body": brief.body, "status": brief.status}
 
     return mcp
 

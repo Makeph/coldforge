@@ -48,6 +48,7 @@ rebuilt small and honest:
 | LLM-personalized emails | `ProspectAI` | ~150 lines, not 137k; **always** degrades to template fill |
 | Curated reply-driving templates, silent-reply follow-up, SPF/DKIM/DMARC check | `coldflow` | Original template pack + `doctor` + reply→cancel rule |
 | "Drop your site → learn who buys it", fit-scored segments, reply triage, learn-what-works | AutoGTM tools (`explee.com` & co) | `icp build` + `leads score`, `reply` classification, `stats --by template`, all local and editable |
+| AI-answer-engine visibility tracking, keyword-cluster → article generation | `babylovegrowth.ai` (SEO/GEO autopilot) | `geo check` asks Claude/ChatGPT/Perplexity/Gemini directly and reads the answer; `icp build`'s `content_gaps` + `content plan`/`draft` cluster and write the articles — no fake backlink network, no dashboard, just the two steps that are honestly portable |
 
 Everything **degrades gracefully**: no `ANTHROPIC_API_KEY` → deterministic
 template fill; no Tavily key → DuckDuckGo + site scrape; no SMTP → dry-run
@@ -81,6 +82,9 @@ coldforge doctor acme.io                 # SPF / DKIM / DMARC, 0–100 score
 coldforge reply mark alex@acme.io --text "pas intéressé"   # auto-classified
 coldforge suppress add cto@acme.io       # do-not-contact list, honoured everywhere
 coldforge stats q3 --by template         # which copy earns replies → double down
+coldforge geo check --query "best CRM for real estate agents" --brand acme
+coldforge content plan                   # ICP keyword gaps → numbered article briefs
+coldforge content draft 01-...           # write one (AI if a key is set, else an outline)
 ```
 
 ### MCP (drive it from any MCP client)
@@ -102,9 +106,9 @@ Register it with your MCP client:
 
 Tools exposed: `research_prospect`, `draft_email`, `list_templates`,
 `show_template`, `check_deliverability`, `build_icp`, `score_prospect`,
-`lint_email`, `classify_reply`. Now you can ask your assistant *"research Alex
-at Acme and draft a pain-point cold email"* and it uses the same engine the
-CLI does.
+`lint_email`, `classify_reply`, `geo_check_visibility`, `plan_content`,
+`draft_article`. Now you can ask your assistant *"research Alex at Acme and
+draft a pain-point cold email"* and it uses the same engine the CLI does.
 
 ## Sequences
 
@@ -146,11 +150,12 @@ Everything is optional — copy `.env.example` to `.env` and fill what you need.
 
 | Variable | Purpose | Without it |
 |----------|---------|------------|
-| `ANTHROPIC_API_KEY` | LLM-personalized drafts | deterministic template fill |
+| `ANTHROPIC_API_KEY` | LLM-personalized drafts, `content_gaps` in the ICP | deterministic template fill |
 | `TAVILY_API_KEY` | high-quality research | DuckDuckGo + site scrape |
 | `SMTP_*`, `COLDFORGE_FROM_*` | actually send mail | dry-run only |
 | `IMAP_*` | auto-detect replies | mark replies manually |
 | `COLDFORGE_DAILY_LIMIT` / `SEND_WINDOW` / `SEND_DAYS` | guardrails | sane defaults |
+| `OPENAI_API_KEY` / `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` | check those engines too in `geo check` | that engine is skipped |
 
 ## Target the right people (ICP + scoring)
 
@@ -168,6 +173,33 @@ summary, the pains it removes, ranked buyer segments and match keywords — the
 model proposes, you edit. With `ANTHROPIC_API_KEY` set, an LLM writes the
 profile and judges each lead; without it, a deterministic keyword heuristic
 keeps ranking usable offline.
+
+## GEO visibility & content (borrowed from BabyLoveGrowth)
+
+BabyLoveGrowth sells "get on Google and ChatGPT's radar" as a black-box
+dashboard: it writes articles, builds backlinks, and tracks whether you're
+mentioned when someone asks an AI. coldforge only takes the two pieces that
+are honestly portable to a local, keyless-by-default tool — and skips the
+backlink network, which can't be faked:
+
+```bash
+coldforge icp build --site acme.io       # with a key, also derives content_gaps:
+                                          #   topics your buyers search for that
+                                          #   your own site doesn't visibly answer
+coldforge content plan                   # cluster keywords/content_gaps → article briefs
+coldforge content draft 01-...           # write one (LLM if a key is set, else an outline)
+coldforge geo check -q "best CRM for real estate agents" -b acme
+                                          # ask Claude/ChatGPT/Perplexity/Gemini directly —
+                                          # whichever engines have a key configured — and see
+                                          # whether "acme" shows up in the answer
+```
+
+`geo check` degrades per engine, independently: set none, one, or all four of
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `PERPLEXITY_API_KEY` /
+`GEMINI_API_KEY`; each configured engine gets queried, the rest are skipped.
+Pass `--lead` to save the result as a research signal — "you don't show up
+when I ask ChatGPT about X" is a genuinely concrete cold-email opener. The
+content plan lives in one editable file, `~/.coldforge/content/plan.json`.
 
 ## Reply triage
 

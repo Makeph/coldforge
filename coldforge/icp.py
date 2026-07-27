@@ -77,6 +77,9 @@ def _heuristic_icp(site: str, text: str) -> dict:
         "pains": [],
         "segments": [],
         "keywords": _keywords(text),
+        # content/SEO opportunities: needs a model to infer what's *missing*
+        # from the page, so the offline heuristic leaves this empty.
+        "content_gaps": [],
         "source": "heuristic",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -95,7 +98,10 @@ def _llm_icp(site: str, text: str, settings: Settings) -> dict | None:
         '  "segments": list of {"name", "fit" (0-100 int), "why"} — 3-6 buyer segments '
         "ranked by likelihood to pay,\n"
         '  "keywords": 15-25 lowercase words/phrases likely to appear in a good-fit '
-        "lead's company, title or website.\n\n"
+        "lead's company, title or website,\n"
+        '  "content_gaps": list of {"topic", "why"} — 4-8 questions or subjects this '
+        "company's buyers search for that the page above does NOT visibly answer or "
+        "rank for (a content/SEO opportunity — feeds `coldforge content plan`).\n\n"
         f"Site: {site}\n---\n{text[:6000]}"
     )
     try:
@@ -116,6 +122,7 @@ def _llm_icp(site: str, text: str, settings: Settings) -> dict | None:
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     data.setdefault("keywords", _keywords(text))
+    data.setdefault("content_gaps", [])
     return data
 
 
