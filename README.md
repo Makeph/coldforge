@@ -238,4 +238,4 @@ the law that applies to you (CAN-SPAM, GDPR, etc.).
 
 ## License
 
-MIT © 2026 Aurore Biakou
+MIT © 2026 Makeph
