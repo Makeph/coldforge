@@ -101,7 +101,7 @@ def by_category(category: str | None = None) -> list[Template]:
 class _SafeDict(dict):
     """Leave unknown ``{{vars}}`` untouched instead of raising."""
 
-    def __missing__(self, key: str) -> str:  # noqa: D401
+    def __missing__(self, key: str) -> str:
         return "{{" + key + "}}"
 
 

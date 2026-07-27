@@ -84,7 +84,10 @@ def _heuristic_plan(icp: dict, count: int) -> list[ContentBrief]:
             chunk = chunk or keywords[:3]
         elif chunk:
             topic = f"Guide: {', '.join(chunk)}"
-            angle = "Local keyword cluster from the ICP (no content_gaps — set ANTHROPIC_API_KEY for those)."
+            angle = (
+                "Local keyword cluster from the ICP "
+                "(no content_gaps — set ANTHROPIC_API_KEY for those)."
+            )
         else:
             break
         briefs.append(ContentBrief(id=_slug(topic, i + 1), topic=topic,
@@ -118,7 +121,7 @@ def _llm_plan(icp: dict, count: int, settings: Settings) -> list[ContentBrief] |
         raw = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         data = json.loads(m.group(0)) if m else None
-    except Exception:  # noqa: BLE001 — any failure → heuristic fallback
+    except Exception:  # any failure -> heuristic fallback
         return None
     if not isinstance(data, list) or not data:
         return None
@@ -168,7 +171,8 @@ def _llm_draft(brief: ContentBrief, icp: dict, settings: Settings) -> str | None
         "quotable whole by AI answer engines (a direct answer near the top, clear claims, "
         "concrete numbers/examples) as well as to rank on Google. Same language as the "
         "company context below. 500-900 words, H2 sections, no fluff intro.\n\n"
-        f"Topic: {brief.topic}\nAngle: {brief.angle}\nTarget keywords: {', '.join(brief.keywords)}\n\n"
+        f"Topic: {brief.topic}\nAngle: {brief.angle}\n"
+        f"Target keywords: {', '.join(brief.keywords)}\n\n"
         f"Company context: {(icp.get('product') or '')[:600]}"
     )
     try:
@@ -178,7 +182,7 @@ def _llm_draft(brief: ContentBrief, icp: dict, settings: Settings) -> str | None
             messages=[{"role": "user", "content": prompt}],
         )
         return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

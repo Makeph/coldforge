@@ -19,7 +19,8 @@ import re
 
 from .config import Settings, get_settings
 from .models import Draft, Lead, Signal
-from .templates import Template, get as get_template, missing_vars, render
+from .templates import Template, missing_vars, render
+from .templates import get as get_template
 
 # Template variables that conventionally hold the personalized opener / hook.
 _OPENER_VARS = ("observation", "candidate_signal", "candidate_work", "specific_thing",
@@ -97,11 +98,11 @@ def _llm_rewrite(template: Template, variables: dict[str, str],
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
-    except Exception as exc:  # noqa: BLE001 — any API failure → fall back
+    except Exception as exc:  # any API failure -> fall back to template fill
         return Draft(subject="", body="", template_id=template.id, personalized=False,
                      notes=f"LLM unavailable ({exc.__class__.__name__}); used template fill.")
 
-    m = re.match(r"\s*SUBJECT:\s*(?P<subj>.+?)\n(?P<body>.*)$", text, re.DOTALL | re.I)
+    m = re.match(r"\s*SUBJECT:\s*(?P<subj>.+?)\n(?P<body>.*)$", text, re.DOTALL | re.IGNORECASE)
     if not m:
         return Draft(subject=render(template.subject, variables), body=text.strip(),
                      template_id=template.id, personalized=True,

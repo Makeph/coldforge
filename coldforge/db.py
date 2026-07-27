@@ -125,7 +125,7 @@ class Store:
     def close(self) -> None:
         self.conn.close()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Store:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -201,7 +201,8 @@ class Store:
     # ── signals ────────────────────────────────────────────────────────────
     def add_signal(self, sig: Signal) -> Signal:
         cur = self.conn.execute(
-            "INSERT INTO signals(lead_id,text,source,url,created_at) VALUES(?,?,?,?,?) RETURNING id",
+            "INSERT INTO signals(lead_id,text,source,url,created_at)"
+            " VALUES(?,?,?,?,?) RETURNING id",
             (sig.lead_id, sig.text, sig.source, sig.url, _now()),
         )
         sig.id = cur.fetchone()[0]

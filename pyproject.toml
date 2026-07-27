@@ -37,7 +37,7 @@ dependencies = [
 ai = ["anthropic>=0.40"]          # LLM personalization via the Anthropic API (falls back to template fill)
 mcp = ["mcp>=1.2"]                # expose research_prospect / draft_email over MCP
 dns = ["dnspython>=2.6"]          # SPF/DKIM/DMARC checks without DNS-over-HTTPS
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["pytest>=8.0", "ruff>=0.16,<0.17"]
 all = ["anthropic>=0.40", "mcp>=1.2", "dnspython>=2.6"]
 
 [project.urls]
@@ -56,3 +56,18 @@ artifacts = ["coldforge/templates/**/*.md"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+# Selected explicitly: ruff's implicit default set grows with each release, so
+# relying on it means a new ruff turns a green CI red without a code change.
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "FURB", "RUF"]
+ignore = [
+    "B008",   # Typer declares CLI options as call-valued defaults; that's the API.
+    "SIM105", # contextlib.suppress reads worse than the try/except it replaces here.
+    "RUF001", # → and × are deliberate in the prose, the CLI help and the FR templates.
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]

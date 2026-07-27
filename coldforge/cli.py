@@ -191,8 +191,14 @@ def templates_show(template_id: str) -> None:
             f"[dim]variables:[/] {', '.join(sorted(t.required_vars()))}")
     console.print(Panel(meta, border_style="cyan"))
     if t.deliverability_notes:
-        console.print(Panel(t.deliverability_notes.strip(), title="deliverability", border_style="yellow"))
-    console.print(Panel(f"[bold]Subject:[/] {t.subject}\n\n{t.body}", title="template", border_style="blue"))
+        console.print(
+            Panel(t.deliverability_notes.strip(), title="deliverability", border_style="yellow")
+        )
+    console.print(
+        Panel(
+            f"[bold]Subject:[/] {t.subject}\n\n{t.body}", title="template", border_style="blue"
+        )
+    )
 
 
 # ── leads ────────────────────────────────────────────────────────────────────
@@ -388,7 +394,9 @@ def research(
             else:
                 console.print(f"[yellow]∅[/] [cyan]{ld.email}[/] — no signal found")
     if not settings.tavily_api_key:
-        console.print("[dim]tip: set TAVILY_API_KEY for stronger signals than the DuckDuckGo fallback.[/]")
+        console.print(
+            "[dim]tip: set TAVILY_API_KEY for stronger signals than the DuckDuckGo fallback.[/]"
+        )
 
 
 # ── draft ────────────────────────────────────────────────────────────────────
@@ -595,7 +603,9 @@ def tick(
     if result.held_window:
         console.print("[dim]Held: outside send window/days.[/]")
     if result.held_limit:
-        console.print(f"[dim]Held {result.held_limit} for the daily limit ({settings.daily_limit}).[/]")
+        console.print(
+            f"[dim]Held {result.held_limit} for the daily limit ({settings.daily_limit}).[/]"
+        )
 
 
 # ── replies ──────────────────────────────────────────────────────────────────

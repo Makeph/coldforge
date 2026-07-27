@@ -78,7 +78,7 @@ def _llm(text: str, settings: Settings) -> str | None:
             b.text for b in resp.content if getattr(b, "type", "") == "text"
         ).strip().lower()
         return word if word in CATEGORIES else None
-    except Exception:  # noqa: BLE001 — triage must never crash a scan
+    except Exception:  # triage must never crash a scan
         return None
 
 

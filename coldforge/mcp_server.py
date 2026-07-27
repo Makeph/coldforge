@@ -14,9 +14,9 @@ Tools
 * ``score_prospect(...)``                                → 0–100 fit vs the ICP
 * ``lint_email(subject, body)``                          → spam-filter content check
 * ``classify_reply(subject, body)``                      → reply triage category
-* ``geo_check_visibility(query, brand)``                 → mentioned by ChatGPT/Claude/Perplexity/Gemini?
-* ``plan_content(count?)``                                → ICP keyword gaps → article briefs
-* ``draft_article(brief_id)``                             → write one planned article
+* ``geo_check_visibility(query, brand)``                 → cited by the answer engines?
+* ``plan_content(count?)``                               → ICP keyword gaps → article briefs
+* ``draft_article(brief_id)``                            → write one planned article
 
 Requires the ``mcp`` extra: ``pip install 'coldforge[mcp]'``.
 """
@@ -27,7 +27,8 @@ from .config import get_settings
 from .models import Lead, Signal
 from .personalize import draft_email as _draft_email
 from .research import research_lead
-from .templates import by_category, get as get_template
+from .templates import by_category
+from .templates import get as get_template
 
 
 def _build_server():
@@ -103,7 +104,8 @@ def _build_server():
         """Read a product website and derive an Ideal Customer Profile: what it
         sells, the pains it removes, and ranked buyer segments. Saved to
         $COLDFORGE_HOME/icp.json so `score_prospect` and the CLI can use it."""
-        from .icp import build_icp as _build, save_icp
+        from .icp import build_icp as _build
+        from .icp import save_icp
 
         icp = _build(site, get_settings())
         save_icp(icp)

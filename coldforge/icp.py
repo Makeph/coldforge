@@ -25,7 +25,7 @@ from .config import Settings, get_settings
 from .models import Lead
 from .research import scrape
 
-_WORD_RE = re.compile(r"[a-zà-ü][a-zà-ü'\-]{3,}", re.I)
+_WORD_RE = re.compile(r"[a-zà-ü][a-zà-ü'\-]{3,}", re.IGNORECASE)
 
 # Minimal FR+EN stopwords — just enough to keep the heuristic keywords useful.
 _STOP = {
@@ -113,7 +113,7 @@ def _llm_icp(site: str, text: str, settings: Settings) -> dict | None:
         raw = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         data = json.loads(m.group(0)) if m else None
-    except Exception:  # noqa: BLE001 — any failure → heuristic fallback
+    except Exception:  # any failure -> heuristic fallback
         return None
     if not isinstance(data, dict) or "product" not in data:
         return None
@@ -160,6 +160,11 @@ def _heuristic_score(lead: Lead, icp: dict, signal_text: str = "") -> tuple[int,
     return score, reason
 
 
+def _icp_digest(icp: dict) -> dict:
+    """The three ICP fields worth spending prompt tokens on."""
+    return {k: icp[k] for k in ("product", "pains", "segments") if k in icp}
+
+
 def _llm_score(lead: Lead, icp: dict, signal_text: str,
                   settings: Settings) -> tuple[int, str] | None:
     try:
@@ -172,7 +177,7 @@ def _llm_score(lead: Lead, icp: dict, signal_text: str,
     prompt = (
         "Score how well this lead fits the Ideal Customer Profile, 0-100 "
         "(100 = exactly the buyer). Answer exactly:\nSCORE: <int>\nREASON: <one line>\n\n"
-        f"ICP:\n{json.dumps({k: icp[k] for k in ('product', 'pains', 'segments') if k in icp}, ensure_ascii=False)}\n\n"
+        f"ICP:\n{json.dumps(_icp_digest(icp), ensure_ascii=False)}\n\n"
         f"Lead:\n{lead_desc}"
     )
     try:
@@ -182,11 +187,11 @@ def _llm_score(lead: Lead, icp: dict, signal_text: str,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-        m = re.search(r"SCORE:\s*(\d{1,3}).*?REASON:\s*(.+)", raw, re.DOTALL | re.I)
+        m = re.search(r"SCORE:\s*(\d{1,3}).*?REASON:\s*(.+)", raw, re.DOTALL | re.IGNORECASE)
         if not m:
             return None
         return min(100, int(m.group(1))), m.group(2).strip()[:300]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

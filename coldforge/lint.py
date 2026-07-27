@@ -28,7 +28,7 @@ _SPAM_WORDS = {
     "sans engagement", "profitez vite", "offre exceptionnelle", "incroyable",
 }
 
-_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
+_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _CAPS_WORD_RE = re.compile(r"\b[A-ZÀ-Ü]{4,}\b")
 
 

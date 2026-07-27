@@ -53,7 +53,7 @@ def _ask_claude(query: str, settings: Settings) -> str | None:
             messages=[{"role": "user", "content": query}],
         )
         return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-    except Exception:  # noqa: BLE001 — a failed engine shouldn't sink the others
+    except Exception:  # a failed engine should not sink the others
         return None
 
 

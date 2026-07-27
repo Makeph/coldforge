@@ -49,7 +49,9 @@ def scrape(url: str, *, max_chars: int = 4000) -> str:
     except requests.RequestException:
         return ""
     body = resp.text
-    body = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", body, flags=re.DOTALL | re.I)
+    body = re.sub(
+        r"<(script|style|noscript)[^>]*>.*?</\1>", " ", body, flags=re.DOTALL | re.IGNORECASE
+    )
     return _clean(body)[:max_chars]
 
 

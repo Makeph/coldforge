@@ -208,7 +208,7 @@ def tick(store: Store, settings: Settings, sender, *, now: datetime | None = Non
             remaining -= 1
             # jittered pacing between real sends
             _pace(settings)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             store.mark_message(msg.id, "failed", error=str(exc)[:300])  # type: ignore[arg-type]
 
     return result

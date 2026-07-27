@@ -12,8 +12,8 @@ from coldforge.models import Campaign, Lead, Signal
 from coldforge.personalize import draft_email
 from coldforge.sender import DryRunSender
 from coldforge.sequence import normalize_sequence, schedule_campaign, tick, within_window
-from coldforge.templates import load_all, missing_vars, render
 from coldforge.templates import get as get_template
+from coldforge.templates import load_all, missing_vars, render
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ def test_schedule_creates_all_steps(store, settings):
 
 
 def test_tick_sends_due_step_zero_only(store, settings):
-    camp, _ = _seed_campaign(store, settings)
+    _seed_campaign(store, settings)
     sender = DryRunSender()
     res = tick(store, settings, sender, now=datetime(2030, 1, 1, 10, 0))
     # only step 0 is due on day 1; step 1 is +3 days
