@@ -107,6 +107,32 @@ class Campaign:
     id: int | None = None
 
 
+# Ordered pipeline stages. The first three are *derived* — a lead is
+# ``contacted`` once a message was sent, ``replied`` / ``interested`` come from
+# the replies table — so only the later ones are ever set by hand.
+STAGES = (
+    "contacted", "replied", "interested",
+    "call_booked", "call_done", "quoted", "won", "lost",
+)
+MANUAL_STAGES = STAGES[3:]
+
+
+@dataclass
+class Stage:
+    """One step a lead reached in the pipeline, recorded when it happened.
+
+    Stages are append-only: the row is the history, and the latest row for a
+    lead is its current stage. That is what turns "sent / replied" into a
+    funnel you can actually read — N contacted -> M replied -> K calls."""
+
+    lead_id: int
+    stage: str
+    campaign_id: int | None = None
+    note: str = ""
+    set_at: datetime = field(default_factory=_utcnow)
+    id: int | None = None
+
+
 @dataclass
 class GeoCheck:
     """One AI-answer-engine's response to a buyer-style question — did it

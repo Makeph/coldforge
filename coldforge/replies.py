@@ -34,6 +34,8 @@ _NEGATIVE = (
     "not the right time", "no budget", "please don't", "pas intéressé",
     "pas interesse", "pas intéressée", "non merci", "pas le bon moment",
     "pas de budget", "déjà équipé", "deja equipe", "ce n'est pas pour nous",
+    "pas notre sujet", "pas concerné", "pas concernés", "sans suite",
+    "pas besoin", "en interne", "on ne sous-traite pas", "nous ne sous-traitons pas",
 )
 _POSITIVE = (
     "interested", "tell me more", "more info", "sounds good", "let's talk",
@@ -41,6 +43,13 @@ _POSITIVE = (
     "intéressé", "interesse", "intéressée", "en savoir plus", "dites-m'en plus",
     "on peut échanger", "un appel", "un rdv", "rendez-vous", "combien",
     "tarif", "envoyez-moi", "essai",
+    # the shapes a French "yes" actually takes — a low-friction CTA ("shall I
+    # send you the link?") is answered in two words, not with the word
+    # "interested". Ordering saves us: "pas intéressé" is matched as negative
+    # before "intéresse" is ever tested.
+    "intéresse", "interesse", "démo", "volontiers", "avec plaisir",
+    "veux bien", "envoyez", "allez-y", "allez y", "je suis preneur", "preneur",
+    "partant", "on en parle", "quel prix", "quel tarif", "ça m'arrange",
 )
 
 

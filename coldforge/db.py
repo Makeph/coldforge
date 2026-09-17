@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Campaign, Lead, Message, Signal
+from .models import Campaign, Lead, Message, Signal, Stage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS replies (
     category     TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS stages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id      INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    campaign_id  INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+    stage        TEXT NOT NULL,
+    note         TEXT DEFAULT '',
+    set_at       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS suppressions (
     email       TEXT PRIMARY KEY,
     reason      TEXT DEFAULT '',
@@ -82,6 +91,7 @@ CREATE TABLE IF NOT EXISTS suppressions (
 CREATE INDEX IF NOT EXISTS idx_messages_due
     ON messages(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_signals_lead ON signals(lead_id);
+CREATE INDEX IF NOT EXISTS idx_stages_lead ON stages(lead_id);
 """
 
 
@@ -349,6 +359,16 @@ class Store:
             ).fetchone()
         return row is not None
 
+    def leads_with_reply_category(self, category: str,
+                                  campaign_id: int | None = None) -> set[int]:
+        """Lead ids whose reply was triaged as *category* (see :mod:`coldforge.replies`)."""
+        sql = "SELECT DISTINCT lead_id FROM replies WHERE category=?"
+        args: tuple = (category,)
+        if campaign_id is not None:
+            sql += " AND (campaign_id=? OR campaign_id IS NULL)"
+            args += (campaign_id,)
+        return {r[0] for r in self.conn.execute(sql, args)}
+
     def reply_categories(self, campaign_id: int | None = None) -> dict[str, int]:
         """Count replies per triage category (see :mod:`coldforge.replies`)."""
         if campaign_id is None:
@@ -363,6 +383,59 @@ class Store:
                 (campaign_id,),
             ).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    # ── stages ─────────────────────────────────────────────────────────────
+    def set_stage(self, lead_id: int, stage: str, campaign_id: int | None = None,
+                  note: str = "") -> Stage:
+        """Record that *lead_id* reached *stage*. Append-only: the table keeps
+        the history, :meth:`stage_for` reads the latest entry."""
+        row = Stage(lead_id=lead_id, stage=stage, campaign_id=campaign_id, note=note)
+        cur = self.conn.execute(
+            "INSERT INTO stages(lead_id,campaign_id,stage,note,set_at) "
+            "VALUES(?,?,?,?,?) RETURNING id",
+            (lead_id, campaign_id, stage, note, _now()),
+        )
+        row.id = cur.fetchone()[0]
+        self.conn.commit()
+        return row
+
+    def stage_for(self, lead_id: int, campaign_id: int | None = None) -> Stage | None:
+        """The most recently recorded stage for *lead_id* (None if never set)."""
+        sql = "SELECT * FROM stages WHERE lead_id=?"
+        args: tuple = (lead_id,)
+        if campaign_id is not None:
+            sql += " AND (campaign_id=? OR campaign_id IS NULL)"
+            args += (campaign_id,)
+        row = self.conn.execute(sql + " ORDER BY set_at DESC, id DESC LIMIT 1", args).fetchone()
+        return self._row_to_stage(row) if row else None
+
+    def leads_at_stage(self, stage: str, campaign_id: int | None = None) -> set[int]:
+        """Lead ids that ever reached *stage* — the funnel counts reaching a
+        step, not sitting on it, so a won deal still counts as a booked call."""
+        sql = "SELECT DISTINCT lead_id FROM stages WHERE stage=?"
+        args: tuple = (stage,)
+        if campaign_id is not None:
+            sql += " AND (campaign_id=? OR campaign_id IS NULL)"
+            args += (campaign_id,)
+        return {r[0] for r in self.conn.execute(sql, args)}
+
+    def list_stages(self, stage: str = "") -> list[Stage]:
+        if stage:
+            rows = self.conn.execute(
+                "SELECT * FROM stages WHERE stage=? ORDER BY set_at DESC, id DESC", (stage,)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM stages ORDER BY set_at DESC, id DESC"
+            ).fetchall()
+        return [self._row_to_stage(r) for r in rows]
+
+    @staticmethod
+    def _row_to_stage(row: sqlite3.Row) -> Stage:
+        return Stage(
+            id=row["id"], lead_id=row["lead_id"], campaign_id=row["campaign_id"],
+            stage=row["stage"], note=row["note"] or "", set_at=_dt(row["set_at"]),
+        )
 
     # ── suppressions ───────────────────────────────────────────────────────
     def suppress(self, email: str, reason: str = "") -> None:

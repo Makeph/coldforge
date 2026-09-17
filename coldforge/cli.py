@@ -15,6 +15,8 @@
     coldforge tick [--dry-run]           # send due mail (run from cron)
     coldforge reply mark <lead>          # record a reply (cancels follow-ups)
     coldforge suppress add <email>       # do-not-contact list
+    coldforge stage set <lead> <stage>   # record a call booked / quote / deal
+    coldforge funnel [name]              # N contacted -> M replied -> K calls
     coldforge stats [name] [--by ...]    # results, incl. per template/variant
     coldforge doctor <domain>            # SPF/DKIM/DMARC deliverability
     coldforge geo check --query "..."    # are you mentioned by ChatGPT/Claude/Perplexity/Gemini?
@@ -38,7 +40,7 @@ from rich.table import Table
 from . import __version__
 from .config import get_settings
 from .db import Store
-from .models import Campaign, Lead, Signal
+from .models import MANUAL_STAGES, Campaign, Lead, Signal
 from .research import research_lead
 
 app = typer.Typer(
@@ -54,6 +56,8 @@ reply_app = typer.Typer(help="Record / detect replies.", no_args_is_help=True)
 icp_app = typer.Typer(help="Ideal Customer Profile: build from your site, then score leads.",
                       no_args_is_help=True)
 suppress_app = typer.Typer(help="Do-not-contact list.", no_args_is_help=True)
+stage_app = typer.Typer(help="Record what happens after the reply: call, quote, deal.",
+                        no_args_is_help=True)
 geo_app = typer.Typer(help="AI-answer-engine visibility (GEO): are you mentioned when a "
                           "buyer asks ChatGPT / Claude / Perplexity / Gemini?",
                      no_args_is_help=True)
@@ -65,6 +69,7 @@ app.add_typer(campaign_app, name="campaign")
 app.add_typer(reply_app, name="reply")
 app.add_typer(icp_app, name="icp")
 app.add_typer(suppress_app, name="suppress")
+app.add_typer(stage_app, name="stage")
 app.add_typer(geo_app, name="geo")
 app.add_typer(content_app, name="content")
 
@@ -431,19 +436,66 @@ def draft(
 
 
 # ── lint ─────────────────────────────────────────────────────────────────────
+def _lint_campaign(name: str) -> None:
+    """Lint every scheduled message of *name*, grouped by step."""
+    from .lint import lint_draft
+
+    with _store() as store:
+        c = store.get_campaign(name)
+        if not c:
+            _err(f"Campaign '{name}' not found.")
+        msgs = [m for m in store.messages_for_campaign(c.id)  # type: ignore[arg-type]
+                if m.status == "scheduled"]
+    if not msgs:
+        _err(f"Nothing scheduled on '{name}'. Run: coldforge campaign activate {name}")
+
+    groups: dict[tuple[int, str], list] = {}
+    for m in msgs:
+        groups.setdefault((m.step, m.template_id), []).append(lint_draft(m.subject, m.body))
+
+    table = Table(title=f"{name} · {len(msgs)} scheduled", show_lines=False,
+                  title_justify="left")
+    for col in ("step", "template", "n", "worst", "issues"):
+        table.add_column(col, overflow="fold")
+    worst_overall = 100
+    for (step, tpl), reports in sorted(groups.items()):
+        worst = min(r.score for r in reports)
+        worst_overall = min(worst_overall, worst)
+        issues = sorted({i.message for r in reports for i in r.issues})
+        color = "green" if worst >= 70 else "red"
+        table.add_row(str(step), tpl or "—", str(len(reports)),
+                      f"[{color}]{worst}[/]", chr(10).join(issues) or "—")
+    console.print(table)
+    if worst_overall < 70:
+        console.print("[red]Rewrite the failing step before the first send.[/]")
+        raise typer.Exit(1)
+    console.print("[green]✓[/] Every scheduled message is clean enough to send.")
+
+
 @app.command()
 def lint(
     lead: str = typer.Option("", "--lead", "-l", help="Lead id / email to render for."),
     template: str = typer.Option("", "--template", "-t", help="Template id to render."),
+    campaign: str = typer.Option("", "--campaign", "-c",
+                                 help="Or lint every message a campaign has scheduled."),
     subject: str = typer.Option("", "--subject", help="Or lint raw copy: the subject."),
     body: str = typer.Option("", "--body", help="Or lint raw copy: the body."),
 ) -> None:
     """Spam-filter check an email before it sends (trigger words, links, caps…).
 
-    Either render a template for a lead (--lead + --template) or pass raw copy
-    (--subject + --body). Score < 70 means: rewrite before sending.
+    Three ways in: render a template for a lead (--lead + --template), lint a
+    whole scheduled campaign (--campaign), or pass raw copy (--subject/--body).
+    Score < 70 means: rewrite before sending.
+
+    Prefer --campaign for a sequence whose follow-ups reply inside the thread:
+    a bare template still carries {{original_subject}}, which only the scheduler
+    can fill, so linting it alone always reports a false unfilled variable.
     """
     from .lint import lint_draft
+
+    if campaign:
+        _lint_campaign(campaign)
+        return
 
     if template:
         from .personalize import draft_email
@@ -841,6 +893,87 @@ def content_show(brief_id: str = typer.Argument(...)) -> None:
 
 
 # ── stats ────────────────────────────────────────────────────────────────────
+# ── stages & funnel ──────────────────────────────────────────────────────────
+@stage_app.command("set")
+def stage_set(
+    lead: str = typer.Argument(..., help="Lead id / email."),
+    stage: str = typer.Argument(..., help=f"One of: {', '.join(MANUAL_STAGES)}."),
+    campaign: str = typer.Option("", "--campaign", "-c", help="Attribute it to one campaign."),
+    note: str = typer.Option("", "--note", "-n", help="Free text: date, who, what was said."),
+) -> None:
+    """Record that a lead reached a stage — this is what makes `funnel` real.
+
+    The steps up to the reply are derived automatically; a booked call, a quote
+    or a signature can only come from you.
+    """
+    if stage not in MANUAL_STAGES:
+        _err(f"Unknown stage '{stage}'. Pick one of: {', '.join(MANUAL_STAGES)}.")
+    with _store() as store:
+        ld = store.find_lead(lead)
+        if not ld:
+            _err(f"No lead matching '{lead}'.")
+        c = store.get_campaign(campaign) if campaign else None
+        if campaign and not c:
+            _err(f"Campaign '{campaign}' not found.")
+        store.set_stage(ld.id, stage, c.id if c else None, note)  # type: ignore[arg-type]
+    where = f" on [bold]{campaign}[/]" if campaign else ""
+    console.print(f"[green]✓[/] [cyan]{ld.email}[/] → [bold]{stage}[/]{where}. "
+                  f"See it land: coldforge funnel {campaign}".rstrip())
+
+
+@stage_app.command("list")
+def stage_list(
+    stage: str = typer.Option("", "--stage", "-s", help="Filter to one stage."),
+) -> None:
+    """List recorded stages, most recent first."""
+    with _store() as store:
+        rows = store.list_stages(stage)
+        if not rows:
+            console.print("[yellow]Nothing recorded yet.[/] "
+                          "Try: coldforge stage set alex@acme.io call_booked")
+            return
+        table = Table(show_lines=False)
+        for col in ("when", "lead", "stage", "note"):
+            table.add_column(col, overflow="fold")
+        for r in rows[:200]:
+            ld = store.get_lead(r.lead_id)
+            table.add_row(r.set_at.strftime("%Y-%m-%d %H:%M") if r.set_at else "",
+                          ld.email if ld else "?", r.stage, r.note)
+    console.print(table)
+
+
+@app.command()
+def funnel(
+    name: str = typer.Argument("", help="Campaign name (omit for all)."),
+) -> None:
+    """N contacted → M replied → K calls → won, each step as a % of the one above."""
+    from .funnel import compute_funnel
+
+    with _store() as store:
+        campaigns = ([store.get_campaign(name)] if name else store.list_campaigns())
+        campaigns = [c for c in campaigns if c]
+        if not campaigns:
+            _err("No campaigns found.")
+        funnels = [compute_funnel(store, c) for c in campaigns]
+
+    for f in funnels:
+        table = Table(title=f.campaign, show_lines=False, title_justify="left")
+        table.add_column("step")
+        table.add_column("n", justify="right")
+        table.add_column("of previous", justify="right")
+        table.add_column("")
+        for st in f.steps:
+            pct = "—" if st.of_previous is None else f"{st.of_previous:.0f}%"
+            table.add_row(st.label, str(st.count), pct,
+                          "" if st.derived else "[dim]typed[/]")
+        console.print(table)
+    if all(f.top == 0 for f in funnels):
+        console.print("[dim]Nothing enrolled yet — coldforge campaign activate <name>[/]")
+    else:
+        console.print("[dim]The steps after the reply come from: "
+                      "coldforge stage set <lead> call_booked[/]")
+
+
 @app.command()
 def stats(
     name: str = typer.Argument("", help="Campaign name (omit for all)."),

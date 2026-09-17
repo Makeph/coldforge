@@ -394,3 +394,89 @@ def test_followup_reuses_the_opener_subject(store, settings):
     bump = next(m for m in msgs if m.step == 1 and m.lead_id == opener.lead_id)
     assert "{{original_subject}}" not in bump.subject   # the bug this replaces
     assert bump.subject == f"Re: {opener.subject}"
+
+
+# ── stages + funnel ──────────────────────────────────────────────────────────
+def test_stage_records_history_and_latest(store):
+    lead = store.upsert_lead(Lead(email="a@acme.io"))
+    store.set_stage(lead.id, "call_booked", note="visio 24/09")
+    store.set_stage(lead.id, "call_done")
+    assert store.stage_for(lead.id).stage == "call_done"
+    assert len(store.list_stages()) == 2            # append-only history
+    assert store.leads_at_stage("call_booked") == {lead.id}   # reached, not sitting on
+
+
+def test_funnel_counts_every_step(store, settings):
+    from coldforge.funnel import compute_funnel
+
+    camp, _ = _seed_campaign(store, settings)
+    tick(store, settings, DryRunSender(), now=datetime(2030, 1, 1, 10, 0))  # 3 sent
+    lead = store.find_lead("l0@x.io")
+    store.record_reply(lead.id, camp.id, category="interested")
+    store.set_stage(lead.id, "call_booked", camp.id)
+
+    steps = {s.key: s for s in compute_funnel(store, camp).steps}
+    assert steps["enrolled"].count == 3
+    assert steps["contacted"].count == 3
+    assert steps["replied"].count == 1
+    assert steps["interested"].count == 1
+    assert steps["call_booked"].count == 1
+    assert steps["won"].count == 0
+    assert steps["contacted"].of_previous == pytest.approx(100.0)
+    assert steps["replied"].of_previous == pytest.approx(100 / 3)
+    # "interested" is a slice of the replies, so it must not become the baseline
+    assert steps["call_booked"].of_previous == pytest.approx(100.0)
+
+
+# ── ICP exclusions ───────────────────────────────────────────────────────────
+def test_icp_exclusions_pull_the_score_down(settings):
+    from coldforge.icp import score_lead
+
+    icp = {"keywords": ["automatisme", "intégrateur"], "segments": [],
+           "exclude": ["tôlerie", "mécanosoudure"]}
+    good = Lead(email="a@x.fr", company="X Automatisme",
+                custom={"segment": "intégrateur automatisme"})
+    bad = Lead(email="b@y.fr", company="Y Automatisme",
+               custom={"segment": "tôlerie et mécanosoudure"})
+    good_score, _ = score_lead(good, icp, settings=settings)
+    bad_score, reason = score_lead(bad, icp, settings=settings)
+    assert good_score > bad_score
+    assert "excluded" in reason and "tôlerie" in reason
+    assert bad_score >= 0                      # floored, never negative
+
+
+def test_icp_without_exclude_key_is_unchanged(settings):
+    from coldforge.icp import score_lead
+
+    lead = Lead(email="a@x.fr", company="X Automatisme")
+    assert score_lead(lead, {"keywords": ["automatisme"]}, settings=settings)[0] == 12
+
+
+def test_low_fit_segments_do_not_donate_keywords(settings):
+    from coldforge.icp import score_lead
+
+    icp = {"keywords": [], "segments": [
+        {"name": "Agence d'un grand groupe", "fit": 30},
+        {"name": "Intégrateur indépendant", "fit": 95},
+    ]}
+    # "grand" belongs to a segment we want to disqualify — it must not score
+    # a lead whose only overlap is the region "Grand Est".
+    assert score_lead(Lead(email="a@x.fr", custom={"region": "Grand Est"}),
+                      icp, settings=settings)[0] == 0
+    assert score_lead(Lead(email="b@x.fr", custom={"segment": "intégrateur indépendant"}),
+                      icp, settings=settings)[0] > 0
+
+
+# ── reply triage in French ───────────────────────────────────────────────────
+def test_french_yes_and_no_are_classified(settings):
+    from coldforge.replies import classify_reply
+
+    for text in ("oui, envoyez le lien, ça m'intéresse", "volontiers",
+                 "je veux bien voir ça", "allez-y", "je suis preneur",
+                 "quel tarif pour le diagnostic ?"):
+        assert classify_reply("", text, settings) == "interested", text
+    for text in ("non merci, on gère en interne", "pas intéressé",
+                 "nous ne sous-traitons pas", "sans suite"):
+        assert classify_reply("", text, settings) == "not_interested", text
+    assert classify_reply("", "je suis absent du bureau", settings) == "ooo"
+    assert classify_reply("", "retirez-moi de votre liste", settings) == "unsubscribe"

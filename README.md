@@ -118,9 +118,12 @@ coldforge templates list                 # browse the pack
 coldforge research alex@acme.io          # store a personalization signal
 coldforge draft -l alex@acme.io -t sales_pain_point --research
 coldforge lint -l alex@acme.io -t sales_pain_point   # spam-filter check the copy
+coldforge lint --campaign q3             # …or every message a campaign has scheduled
 coldforge doctor acme.io                 # SPF / DKIM / DMARC, 0–100
 coldforge reply mark alex@acme.io --text "pas intéressé"   # auto-classified
 coldforge suppress add cto@acme.io       # do-not-contact list, honoured everywhere
+coldforge stage set alex@acme.io call_booked --note "Thu 14:00"   # the steps after the reply
+coldforge funnel q3                      # N contacted → M replied → K calls → won
 coldforge stats q3 --by template         # which copy earns replies → double down
 coldforge geo check --query "best CRM for real estate agents" --brand acme
 coldforge content plan                   # ICP keyword gaps → numbered article briefs
@@ -175,8 +178,10 @@ coldforge leads list                        # ranked, best fit first
 ```
 
 The ICP is a plain JSON file (`~/.coldforge/icp.json`) holding the product
-summary, the pains it removes, ranked buyer segments and match keywords — the
-model proposes, you edit. With `ANTHROPIC_API_KEY` set an LLM writes the profile
+summary, the pains it removes, ranked buyer segments, match keywords and an
+`exclude` list of words that *cost* a lead points — without it, a sheet-metal
+shop whose home page says "automation" ranks like a real integrator. The model
+proposes, you edit. With `ANTHROPIC_API_KEY` set an LLM writes the profile
 and judges each lead; without it a deterministic keyword heuristic keeps ranking
 usable offline.
 
@@ -210,6 +215,36 @@ classified — **interested · not_interested · unsubscribe · ooo · other** �
 French and English. Unsubscribes hit the suppression list instantly; `stats`
 shows the category breakdown, and `stats --by template` tells you which copy
 actually earns replies, so you double down and retire the rest.
+
+## The funnel
+
+`stats` stops one step short of the only question a campaign has to answer —
+*is this worth doing again?* — because the steps that matter most happen after
+the reply. `funnel` adds them:
+
+```console
+$ coldforge funnel q3
+q3
+┌─────────────┬────┬─────────────┬───────┐
+│ step        │  n │ of previous │       │
+├─────────────┼────┼─────────────┼───────┤
+│ enrolled    │ 42 │           — │       │
+│ contacted   │ 40 │         95% │       │
+│ replied     │  7 │         18% │       │
+│ interested  │  3 │         43% │       │
+│ call_booked │  3 │         43% │ typed │
+│ call_done   │  2 │         67% │       │
+│ quoted      │  1 │         50% │       │
+│ won         │  1 │        100% │       │
+└─────────────┴────┴─────────────┴───────┘
+```
+
+Everything up to *interested* is derived from data the engine already owns, so
+it costs no bookkeeping. A booked call can't be detected from an inbox, so the
+rest is one command: `coldforge stage set <lead> call_booked --note "…"`. Each
+row is a percentage of the row above, which names the problem without a
+discussion: 40 contacted → 2 replies is a copy problem, 7 replies → 0 calls is
+an offer problem.
 
 ## Templates
 

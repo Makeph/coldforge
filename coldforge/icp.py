@@ -12,6 +12,10 @@ hand — the model proposes, you stay in charge. Both steps degrade gracefully:
   keyword profile is extracted locally.
 * **score** — the model judges fit when a key is set; otherwise a deterministic
   keyword-overlap heuristic keeps ranking usable offline.
+
+An optional ``exclude`` list is the other half of a real profile: the words
+that should *cost* a lead points. Without it a sheet-metal shop whose home
+page says "automation" ranks like a genuine integrator.
 """
 
 from __future__ import annotations
@@ -77,6 +81,9 @@ def _heuristic_icp(site: str, text: str) -> dict:
         "pains": [],
         "segments": [],
         "keywords": _keywords(text),
+        # words that should COST points — the model can propose them, but
+        # this is the field most worth editing by hand after a first pass.
+        "exclude": [],
         # content/SEO opportunities: needs a model to infer what's *missing*
         # from the page, so the offline heuristic leaves this empty.
         "content_gaps": [],
@@ -99,6 +106,8 @@ def _llm_icp(site: str, text: str, settings: Settings) -> dict | None:
         "ranked by likelihood to pay,\n"
         '  "keywords": 15-25 lowercase words/phrases likely to appear in a good-fit '
         "lead's company, title or website,\n"
+        '  "exclude": 5-12 lowercase words that mark a BAD fit — adjacent trades, '
+        "wrong size, wrong buyer. Each one costs a lead points,\n"
         '  "content_gaps": list of {"topic", "why"} — 4-8 questions or subjects this '
         "company's buyers search for that the page above does NOT visibly answer or "
         "rank for (a content/SEO opportunity — feeds `coldforge content plan`).\n\n"
@@ -122,6 +131,7 @@ def _llm_icp(site: str, text: str, settings: Settings) -> dict | None:
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     data.setdefault("keywords", _keywords(text))
+    data.setdefault("exclude", [])
     data.setdefault("content_gaps", [])
     return data
 
@@ -153,16 +163,35 @@ def _heuristic_score(lead: Lead, icp: dict, signal_text: str = "") -> tuple[int,
         return 0, "no lead data to match"
     needles: set[str] = {k.lower() for k in icp.get("keywords", [])}
     for seg in icp.get("segments", []):
-        needles.update(_WORD_RE.findall(str(seg.get("name", "")).lower()))
+        # A segment listed to be *disqualified* must not donate positive words:
+        # "big group" would otherwise score any lead in a region called Grand Est.
+        try:
+            fit = int(seg.get("fit", 100))
+        except (TypeError, ValueError):
+            fit = 100
+        if fit < 50:
+            continue
+        needles.update(
+            w for w in _WORD_RE.findall(str(seg.get("name", "")).lower())
+            if w not in _STOP
+        )
     hits = sorted(n for n in needles if n and _match(n, haystack))
-    score = min(100, 12 * len(hits))
+    # Exclusions pull the score down rather than filtering the lead out: a
+    # near-miss stays visible (and rankable) instead of vanishing from the list.
+    misses = sorted(
+        w for w in {str(k).lower() for k in icp.get("exclude", [])}
+        if w and _match(w, haystack)
+    )
+    score = max(0, min(100, 12 * len(hits)) - 15 * len(misses))
     reason = ("matches: " + ", ".join(hits[:6])) if hits else "no keyword overlap with ICP"
+    if misses:
+        reason += " — excluded: " + ", ".join(misses[:4])
     return score, reason
 
 
 def _icp_digest(icp: dict) -> dict:
     """The three ICP fields worth spending prompt tokens on."""
-    return {k: icp[k] for k in ("product", "pains", "segments") if k in icp}
+    return {k: icp[k] for k in ("product", "pains", "segments", "exclude") if k in icp}
 
 
 def _llm_score(lead: Lead, icp: dict, signal_text: str,
