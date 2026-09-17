@@ -113,13 +113,19 @@ def schedule_campaign(
             continue
         signal = next(iter(store.signals_for(lead.id)), None)
         cumulative = 0
+        # Follow-ups reply inside the first message's thread, so they need its
+        # rendered subject. Carry it forward instead of shipping a literal
+        # "Re: {{original_subject}}" to the recipient.
+        thread_vars: dict[str, str] = {}
         for step_idx, step in enumerate(sequence):
             cumulative += step["wait_days"]
             when = next_window_start(base + timedelta(days=cumulative), settings)
             drafted: Draft = draft_email(
-                step["template"], lead, signal=signal, settings=settings,
-                force_template_fill=not personalize,
+                step["template"], lead, signal=signal, extra_vars=thread_vars,
+                settings=settings, force_template_fill=not personalize,
             )
+            if step_idx == 0:
+                thread_vars["original_subject"] = drafted.subject
             msg = Message(
                 campaign_id=campaign.id,  # type: ignore[arg-type]
                 lead_id=lead.id, step=step_idx, scheduled_at=when,

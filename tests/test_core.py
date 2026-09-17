@@ -384,3 +384,13 @@ def test_fr_agency_pack_loads(settings):
                         "observation": "Vu votre étude de cas Google Ads"})
     d = draft_email("fr_agence_preuve", lead, settings=settings, force_template_fill=True)
     assert "Léa" in d.body and "{{" not in d.body.replace("{{sender_name}}", "")
+
+
+# ── thread subject carried into follow-ups ───────────────────────────────────
+def test_followup_reuses_the_opener_subject(store, settings):
+    camp, _ = _seed_campaign(store, settings)
+    msgs = store.messages_for_campaign(camp.id)
+    opener = next(m for m in msgs if m.step == 0 and m.lead_id == msgs[0].lead_id)
+    bump = next(m for m in msgs if m.step == 1 and m.lead_id == opener.lead_id)
+    assert "{{original_subject}}" not in bump.subject   # the bug this replaces
+    assert bump.subject == f"Re: {opener.subject}"
