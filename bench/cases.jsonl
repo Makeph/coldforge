@@ -1,0 +1,31 @@
+// Cas de triage pour bench/triage_bench.py — un objet JSON par ligne.
+// Champs: subject, body, expected (dans coldforge.replies.CATEGORIES), note.
+//
+// TOUS LES CAS CI-DESSOUS SONT SYNTHETIQUES. Ils ont ete ecrits a la main en
+// 2026-09-28 pour amorcer le harnais, et refletent ce que leur auteur imagine
+// d'une reponse de prospection -- pas un echantillon de reponses reelles. Une
+// mesure prise dessus est indicative, jamais probante.
+//
+// Pour ajouter de VRAIS cas: copier une reponse recue, retirer nom, societe,
+// adresse et telephone, etiqueter a la main, et retirer la mention synthetique
+// de la note. Le harnais compte les cas synthetiques et l'affiche en tete.
+{"subject": "Re: automatisation ligne de conditionnement", "body": "Volontiers, envoyez-moi le lien", "expected": "interested", "note": "synthetique — oui court, aucun mot-cle evident"}
+{"subject": "Re: votre parc machines", "body": "Ça m'intéresse, quel est votre tarif ?", "expected": "interested", "note": "synthetique — oui explicite + prix"}
+{"subject": "Re: integration robotique", "body": "Je suis preneur, on peut échanger jeudi ?", "expected": "interested", "note": "synthetique — 'preneur', idiome FR"}
+{"subject": "Re: quick question", "body": "Sure, send over the pricing", "expected": "interested", "note": "synthetique — anglais"}
+{"subject": "Re: sous-traitance automatisme", "body": "Non merci, nous ne sous-traitons pas", "expected": "not_interested", "note": "synthetique — refus poli; NE DOIT PAS devenir unsubscribe"}
+{"subject": "Re: votre projet 2026", "body": "Pas le bon moment, on a déjà un prestataire", "expected": "not_interested", "note": "synthetique — timing + incumbent"}
+{"subject": "Re: following up", "body": "We already have a vendor for this, thanks", "expected": "not_interested", "note": "synthetique — anglais, incumbent"}
+{"subject": "Re: prise de contact", "body": "Retirez-moi de votre liste immédiatement", "expected": "unsubscribe", "note": "synthetique — opt-out explicite FR"}
+{"subject": "Re: introduction", "body": "Please remove me from your mailing list", "expected": "unsubscribe", "note": "synthetique — opt-out explicite EN"}
+{"subject": "Absence", "body": "Je suis absent du bureau jusqu'au 15 octobre, de retour le 16", "expected": "ooo", "note": "synthetique — auto-reply FR"}
+{"subject": "Automatic reply", "body": "Automatic reply: I am on annual leave until Monday", "expected": "ooo", "note": "synthetique — auto-reply EN"}
+{"subject": "Re: votre message", "body": "Qui vous a donné mon adresse ?", "expected": "other", "note": "synthetique — question hostile; NE DOIT PAS devenir interested"}
+{"subject": "Re: presentation", "body": "Vous êtes basés où exactement ?", "expected": "other", "note": "synthetique — question neutre, pas un signal d'achat"}
+{"subject": "Re: proposition", "body": "Ok pour un point de 15 minutes la semaine prochaine", "expected": "interested", "note": "synthetique — oui sans aucun mot-cle de la liste"}
+{"subject": "Re: externalisation", "body": "On gère ça en interne depuis toujours", "expected": "not_interested", "note": "synthetique — refus implicite"}
+{"subject": "Re: votre offre", "body": "Ça pourrait coller à ce qu'on cherche, dites-moi en plus", "expected": "interested", "note": "synthetique — interet tiede"}
+{"subject": "Re: notre solution", "body": "Ce n'est pas du tout notre problématique", "expected": "not_interested", "note": "synthetique — hors sujet pour eux"}
+{"subject": "Re: devis", "body": "Envoyez le devis, on regarde en comité mardi", "expected": "interested", "note": "synthetique — signal d'achat fort"}
+{"subject": "Re: relance", "body": "Merci de ne plus me contacter sur cette adresse", "expected": "unsubscribe", "note": "synthetique — opt-out formule politement"}
+{"subject": "Re: votre mail", "body": "Je transmets à mon collègue qui gère ce sujet", "expected": "other", "note": "synthetique — renvoi interne, ni oui ni non"}
