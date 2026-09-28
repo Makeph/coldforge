@@ -23,6 +23,11 @@ _UNSUBSCRIBE = (
     "désinscri", "desinscri", "me désabonner", "me retirer", "retirez-moi",
     "retirez moi", "plus de mail", "plus d'email", "ne plus recevoir",
     "arrêtez de m'écrire",
+    # A French opt-out is often phrased as a courtesy rather than a command:
+    # "merci de ne plus me contacter" carries no imperative and none of the
+    # words above. The singular and the corporate plural are both common, and
+    # the substring starts at "plus" so "de ne plus me contacter" matches too.
+    "plus me contacter", "plus nous contacter",
 )
 _OOO = (
     "out of office", "on vacation", "annual leave", "maternity leave", "auto-reply",

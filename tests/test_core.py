@@ -222,6 +222,18 @@ def test_classify_reply_keywords(settings):
     assert classify_reply("Re: x", "Intéressé — on peut échanger cette semaine ?",
                           settings) == "interested"
     assert classify_reply("Re: x", "qui êtes-vous ?", settings) == "other"
+    # A courteous opt-out is still an opt-out: these carry no imperative and
+    # none of the words the first keywords looked for, yet missing one leaves a
+    # prospect in the sequence after they asked to be left alone.
+    assert classify_reply(
+        "Re: relance", "Merci de ne plus me contacter sur cette adresse",
+        settings) == "unsubscribe"
+    assert classify_reply(
+        "Re: relance", "Merci de ne plus nous contacter", settings) == "unsubscribe"
+    # ...and it must still outrank a positive word in the same message.
+    assert classify_reply(
+        "Re: x", "Merci pour l'info, mais ne plus me contacter svp",
+        settings) == "unsubscribe"
 
 
 def test_reply_category_stored(store):
