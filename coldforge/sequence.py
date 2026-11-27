@@ -109,7 +109,7 @@ def schedule_campaign(
         if lead.id is None:
             continue
         # Never enroll someone who opted out or whose address can't receive mail.
-        if store.is_suppressed(lead.email) or lead.verify_status == "invalid":
+        if store.is_suppressed(lead.email) or lead.verify_status in {"risky", "invalid"}:
             continue
         signal = next(iter(store.signals_for(lead.id)), None)
         cumulative = 0
@@ -146,6 +146,7 @@ class TickResult:
         self.canceled: int = 0
         self.held_limit: int = 0
         self.held_window: bool = False
+        self.held_gate: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -155,11 +156,13 @@ class TickResult:
             "canceled": self.canceled,
             "held_for_daily_limit": self.held_limit,
             "outside_send_window": self.held_window,
+            "held_by_approval_gate": self.held_gate,
         }
 
 
 def tick(store: Store, settings: Settings, sender, *, now: datetime | None = None,
-         dry_run: bool = False) -> TickResult:
+         dry_run: bool = False, auto_approve: bool = True,
+         enforce_gate: bool = False) -> TickResult:
     """Process all due messages, honouring guardrails and the reply→cancel rule.
 
     *sender* is any object with ``send(to, subject, body) -> None`` (see
@@ -178,6 +181,22 @@ def tick(store: Store, settings: Settings, sender, *, now: datetime | None = Non
         return result
 
     for msg in store.due_messages(now):
+        if enforce_gate:
+            if not msg.approved and not auto_approve:
+                result.held_gate += 1
+                continue
+            from .gate import check_message
+
+            gate_result = check_message(store, settings, msg, now)
+            if not gate_result.ok:
+                result.held_gate += 1
+                continue
+            if auto_approve and not msg.approved:
+                store.set_message_approval(msg.id, True)  # type: ignore[arg-type]
+                msg.approved = True
+        elif not auto_approve and not msg.approved:
+            result.held_gate += 1
+            continue
         # reply → cancel: drop conditional follow-ups once the lead replied.
         step_condition = _condition_for(store, msg)
         if step_condition == "no_reply" and store.has_replied(msg.lead_id, msg.campaign_id):
@@ -197,7 +216,7 @@ def tick(store: Store, settings: Settings, sender, *, now: datetime | None = Non
 
         # Suppression list and invalid addresses win over everything else —
         # cancel the lead's whole remaining sequence, not just this step.
-        if store.is_suppressed(lead.email) or lead.verify_status == "invalid":
+        if store.is_suppressed(lead.email) or lead.verify_status in {"risky", "invalid"}:
             store.mark_message(msg.id, "skipped")  # type: ignore[arg-type]
             result.skipped_suppressed.append(msg)
             result.canceled += store.cancel_pending_for_lead(msg.campaign_id, msg.lead_id)

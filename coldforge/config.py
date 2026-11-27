@@ -102,6 +102,8 @@ class Settings:
     perplexity_model: str = "sonar"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
+    postal_address: str = ""
+    gate_window: tuple[time, time] = (time(8, 0), time(19, 0))
 
     @property
     def can_send(self) -> bool:
@@ -164,4 +166,6 @@ def get_settings() -> Settings:
         perplexity_model=os.environ.get("COLDFORGE_PERPLEXITY_MODEL", "sonar"),
         gemini_api_key=os.environ.get("GEMINI_API_KEY") or None,
         gemini_model=os.environ.get("COLDFORGE_GEMINI_MODEL", "gemini-2.0-flash"),
+        postal_address=os.environ.get("COLDFORGE_POSTAL_ADDRESS", "").strip(),
+        gate_window=_parse_window(os.environ.get("COLDFORGE_GATE_WINDOW", "08:00-19:00")),
     )
