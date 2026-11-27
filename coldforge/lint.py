@@ -92,3 +92,18 @@ def lint_draft(subject: str, body: str) -> LintReport:
         report._add("block", "unfilled {{variables}} left in the email")
 
     return report
+
+
+def compliance_issues(body: str, postal_address: str = "") -> list[str]:
+    """Return the two deterministic footer defects used by the send gate."""
+    lower = body.casefold()
+    opt_out = (
+        "unsubscribe", "désinscrire", "desinscrire", "ne plus recevoir",
+        "dites-moi non", "dites moi non", "say no", "opt out",
+    )
+    issues: list[str] = []
+    if not any(term in lower for term in opt_out):
+        issues.append("missing unsubscribe line")
+    if not postal_address or postal_address.casefold() not in lower:
+        issues.append("missing postal address")
+    return issues

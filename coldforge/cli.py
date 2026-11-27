@@ -63,6 +63,9 @@ geo_app = typer.Typer(help="AI-answer-engine visibility (GEO): are you mentioned
                      no_args_is_help=True)
 content_app = typer.Typer(help="SEO/GEO content: cluster the ICP's keyword gaps into "
                               "article briefs, then draft them.", no_args_is_help=True)
+signals_app = typer.Typer(help="Confirm and collect free website signals.", no_args_is_help=True)
+people_app = typer.Typer(help="Find public company decision makers.", no_args_is_help=True)
+outbox_app = typer.Typer(help="Review and approve scheduled messages.", no_args_is_help=True)
 app.add_typer(templates_app, name="templates")
 app.add_typer(leads_app, name="leads")
 app.add_typer(campaign_app, name="campaign")
@@ -72,6 +75,9 @@ app.add_typer(suppress_app, name="suppress")
 app.add_typer(stage_app, name="stage")
 app.add_typer(geo_app, name="geo")
 app.add_typer(content_app, name="content")
+app.add_typer(signals_app, name="signals")
+app.add_typer(people_app, name="people")
+app.add_typer(outbox_app, name="outbox")
 
 
 def _make_console() -> Console:
@@ -626,6 +632,7 @@ def campaign_list() -> None:
 def tick(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would send; send nothing."),
     scan: bool = typer.Option(False, "--scan-replies", help="Poll IMAP for replies first."),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Bypass manual approval."),
 ) -> None:
     """Send all due messages, honouring guardrails and the reply→cancel rule."""
     from .sender import make_sender, scan_replies
@@ -638,7 +645,10 @@ def tick(
             console.print(f"[dim]reply scan: {n} new[/]")
         sender = make_sender(settings, dry_run=dry_run)
         is_dry = dry_run or not settings.can_send
-        result = run_tick(store, settings, sender, dry_run=is_dry)
+        result = run_tick(
+            store, settings, sender, dry_run=is_dry, auto_approve=auto_approve,
+            enforce_gate=True,
+        )
         # Resolve recipients before the store closes.
         preview = [(store.get_lead(m.lead_id), m) for m in result.sent[:20]]
 
@@ -658,6 +668,8 @@ def tick(
         console.print(
             f"[dim]Held {result.held_limit} for the daily limit ({settings.daily_limit}).[/]"
         )
+    if result.held_gate:
+        console.print(f"[dim]Held {result.held_gate} by the approval gate.[/]")
 
 
 # ── replies ──────────────────────────────────────────────────────────────────
@@ -1054,6 +1066,234 @@ _EXAMPLE_SEQUENCE = (
     "  wait_days: 3\n"
     "  condition: no_reply\n"
 )
+
+
+# ── company prospecting pipeline ───────────────────────────────────────────
+@app.command("discover")
+def discover_cmd(
+    source: str = typer.Option("osm", "--source"),
+    category: str = typer.Option("", "--category"),
+    city: str = typer.Option("", "--city"),
+    estimate_only: bool = typer.Option(False, "--estimate"),
+    csv_path: Path | None = typer.Option(None, "--csv"),
+) -> None:
+    """Discover companies, showing the source cost before doing any work."""
+    import requests
+
+    from .discover import discover_csv, discover_osm, estimate
+
+    quote = estimate(source)
+    console.print(f"Estimated cost: [bold]{quote['label']}[/] ({source})")
+    if estimate_only:
+        return
+    if source == "osm":
+        if not category or not city:
+            _err("--category and --city are required for OSM discovery.")
+
+        def fetch_json(url: str):
+            response = requests.get(
+                url, headers={"User-Agent": "coldforge/0.1 (company discovery)"}, timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+        companies = discover_osm(category, city, fetch_json=fetch_json)
+    elif source == "csv" and csv_path:
+        companies = discover_csv(csv_path)
+    else:
+        _err("Use --source osm, or --source csv --csv PATH.")
+    with _store() as store:
+        for company in companies:
+            store.upsert_company(company)
+    console.print(f"[green]✓[/] Stored {len(companies)} companies.")
+
+
+@signals_app.command("list")
+def signals_list_cmd() -> None:
+    from .signals import CATALOG, confirmed_signals
+
+    confirmed = confirmed_signals(get_settings().home)
+    table = Table("key", "label", "cost", "confirmed")
+    for key, definition in CATALOG.items():
+        table.add_row(key, str(definition["label"]), str(definition["cost"]),
+                      "yes" if key in confirmed else "no")
+    console.print(table)
+
+
+@signals_app.command("confirm")
+def signals_confirm_cmd(keys: list[str] = typer.Argument(...)) -> None:
+    from .signals import confirm
+
+    try:
+        selected = confirm(keys, get_settings().home)
+    except ValueError as exc:
+        _err(str(exc))
+    console.print(f"[green]✓[/] Confirmed {len(selected)} signals.")
+
+
+@signals_app.command("profile")
+def signals_profile_cmd(limit: int = typer.Option(0, "--limit", min=0)) -> None:
+    import requests
+
+    from .signals import confirmed_signals, profile_company
+
+    settings = get_settings()
+    confirmed = confirmed_signals(settings.home)
+    if not confirmed:
+        _err("No signals confirmed; run `coldforge signals confirm free` first.")
+
+    def fetch(url: str) -> str | None:
+        try:
+            response = requests.get(
+                url, headers={"User-Agent": "coldforgebot/0.1 (+website profiling)"}, timeout=10
+            )
+            return response.text if response.ok else None
+        except requests.RequestException:
+            return None
+
+    observations = 0
+    with _store() as store:
+        companies = store.list_companies()[:limit or None]
+        for company in companies:
+            found = profile_company(company, fetch=fetch, confirmed=confirmed)
+            for key, value, evidence in found:
+                store.add_company_signal(company.id, key, value, evidence)  # type: ignore[arg-type]
+            observations += len(found)
+            if not found:
+                console.print(f"[dim]{company.name}: no confirmed signal observed[/]")
+    console.print(f"[green]✓[/] Stored {observations} observations.")
+
+
+@people_app.command("find")
+def people_find_cmd(company: str = typer.Option("", "--company")) -> None:
+    import requests
+
+    from .people import candidates, find_people, guess_email_pattern
+    from .verify import verify_email
+
+    def fetch(url: str) -> str | None:
+        try:
+            response = requests.get(
+                url, headers={"User-Agent": "coldforgebot/0.1 (+public people search)"}, timeout=10
+            )
+            return response.text if response.ok else None
+        except requests.RequestException:
+            return None
+
+    added = 0
+    with _store() as store:
+        companies = store.list_companies()
+        if company:
+            companies = [c for c in companies if company.casefold() in c.name.casefold()]
+        for business in companies:
+            people = find_people(business, fetch=fetch)
+            if not people:
+                console.print(
+                    f"[dim]{business.name}: no public team page or decision maker found[/]"
+                )
+                continue
+            known = [
+                lead.email for lead in store.list_leads()
+                if lead.email.endswith(f"@{business.domain}")
+            ]
+            pattern = guess_email_pattern(known, business.domain)
+            for person in people:
+                emails = candidates(person, pattern, business.domain)
+                if not emails:
+                    console.print(f"[dim]{person.name}: found, but no honest email candidate[/]")
+                    continue
+                verified = verify_email(emails[0])
+                if verified.status != "ok":
+                    console.print(f"[yellow]{emails[0]}: {verified.status}; not sendable[/]")
+                    continue
+                lead = Lead(
+                    email=verified.email, first_name=person.first_name,
+                    last_name=person.last_name, company=business.name, title=person.title,
+                    website=business.website, company_id=business.id,
+                    custom={"source_url": person.source_url}, verify_status="ok",
+                )
+                saved = store.upsert_lead(lead)
+                store.set_verify_status(saved.id, "ok")  # type: ignore[arg-type]
+                added += 1
+    console.print(f"[green]✓[/] Added {added} verified decision makers.")
+
+
+@app.command("cohort")
+def cohort_cmd(
+    must: list[str] = typer.Option([], "--must"),
+    none_of: list[str] = typer.Option([], "--none-of"),
+) -> None:
+    from .cohort import cohort, inclusion_reasons
+
+    with _store() as store:
+        selected = cohort(store, must=must, none_of=none_of)
+        console.print(f"[bold]{len(selected)}[/] companies")
+        for company in selected:
+            why = "; ".join(inclusion_reasons(store, company, must=must))
+            console.print(f"  {company.name} — {why}")
+
+
+@app.command("export")
+def export_cmd(
+    csv_path: Path = typer.Option(..., "--csv"),
+    cohort_only: bool = typer.Option(True, "--cohort/--all-companies"),
+    must: list[str] = typer.Option([], "--must"),
+    none_of: list[str] = typer.Option([], "--none-of"),
+) -> None:
+    from .cohort import cohort, export_csv
+
+    with _store() as store:
+        companies = (
+            cohort(store, must=must, none_of=none_of)
+            if cohort_only else store.list_companies()
+        )
+    total = export_csv(companies, csv_path)
+    console.print(f"[green]✓[/] Exported {total} companies to {csv_path}; nothing was sent.")
+
+
+@outbox_app.command("list")
+def outbox_list_cmd() -> None:
+    with _store() as store:
+        messages = store.list_outbox()
+        table = Table("id", "recipient", "subject", "approved")
+        for message in messages:
+            lead = store.get_lead(message.lead_id)
+            table.add_row(str(message.id), lead.email if lead else "?", message.subject,
+                          "yes" if message.approved else "no")
+    console.print(table)
+
+
+@outbox_app.command("approve")
+def outbox_approve_cmd(
+    ids: list[int] | None = typer.Argument(None),
+    all_passing: bool = typer.Option(False, "--all-passing"),
+) -> None:
+    from .gate import check_message
+
+    settings = get_settings()
+    approved = 0
+    with _store() as store:
+        messages = (
+            store.list_outbox()
+            if all_passing else [store.get_message(i) for i in (ids or [])]
+        )
+        for message in messages:
+            if message is None:
+                continue
+            result = check_message(store, settings, message, datetime.now().astimezone())
+            if not result.ok:
+                console.print(f"[red]Message {message.id} refused:[/] {'; '.join(result.reasons)}")
+                continue
+            store.set_message_approval(message.id, True)  # type: ignore[arg-type]
+            approved += 1
+    console.print(f"[green]✓[/] Approved {approved} messages.")
+
+
+@outbox_app.command("reject")
+def outbox_reject_cmd(message_id: int = typer.Argument(...)) -> None:
+    with _store() as store:
+        store.reject_message(message_id)
+    console.print(f"[green]✓[/] Rejected message {message_id}.")
 
 
 if __name__ == "__main__":

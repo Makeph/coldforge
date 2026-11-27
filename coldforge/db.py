@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .companies import Company
 from .models import Campaign, Lead, Message, Signal, Stage
 
 SCHEMA = """
@@ -27,7 +28,35 @@ CREATE TABLE IF NOT EXISTS leads (
     fit_score   INTEGER,
     fit_reason  TEXT DEFAULT '',
     verify_status TEXT DEFAULT '',
+    company_id  INTEGER REFERENCES companies(id) ON DELETE SET NULL,
     created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS companies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    domain      TEXT,
+    website     TEXT DEFAULT '',
+    city        TEXT DEFAULT '',
+    category    TEXT DEFAULT '',
+    phone       TEXT DEFAULT '',
+    source      TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_domain
+    ON companies(domain) WHERE domain IS NOT NULL AND domain != '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_name_city_no_domain
+    ON companies(lower(name), lower(city)) WHERE domain IS NULL OR domain = '';
+
+CREATE TABLE IF NOT EXISTS company_signals (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    key          TEXT NOT NULL,
+    value        TEXT DEFAULT '',
+    evidence_url TEXT DEFAULT '',
+    created_at   TEXT NOT NULL,
+    UNIQUE(company_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS signals (
@@ -61,6 +90,7 @@ CREATE TABLE IF NOT EXISTS messages (
     sent_at       TEXT,
     variant       TEXT DEFAULT '',
     error         TEXT DEFAULT '',
+    approved      INTEGER DEFAULT 0,
     UNIQUE(campaign_id, lead_id, step)
 );
 
@@ -92,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_due
     ON messages(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_signals_lead ON signals(lead_id);
 CREATE INDEX IF NOT EXISTS idx_stages_lead ON stages(lead_id);
+CREATE INDEX IF NOT EXISTS idx_company_signals_company ON company_signals(company_id);
 """
 
 
@@ -125,12 +156,83 @@ class Store:
             ("fit_score", "fit_score INTEGER"),
             ("fit_reason", "fit_reason TEXT DEFAULT ''"),
             ("verify_status", "verify_status TEXT DEFAULT ''"),
+            ("company_id", "company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL"),
         ):
             if name not in lead_cols:
                 self.conn.execute(f"ALTER TABLE leads ADD COLUMN {ddl}")
         reply_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(replies)")}
         if "category" not in reply_cols:
             self.conn.execute("ALTER TABLE replies ADD COLUMN category TEXT DEFAULT ''")
+        message_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(messages)")}
+        if "approved" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN approved INTEGER DEFAULT 0")
+
+    # ── companies ─────────────────────────────────────────────────────────
+    def upsert_company(self, company: Company) -> Company:
+        company.domain = company.domain.strip().lower()
+        if company.domain:
+            row = self.conn.execute(
+                "SELECT id FROM companies WHERE domain=?", (company.domain,)
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id FROM companies WHERE lower(name)=lower(?) AND lower(city)=lower(?) "
+                "AND (domain IS NULL OR domain='')",
+                (company.name, company.city),
+            ).fetchone()
+        values = (
+            company.name, company.domain or None, company.website, company.city,
+            company.category, company.phone, company.source,
+        )
+        if row:
+            company.id = int(row[0])
+            self.conn.execute(
+                "UPDATE companies SET name=?,domain=?,website=?,city=?,category=?,phone=?,source=? "
+                "WHERE id=?", (*values, company.id),
+            )
+        else:
+            cur = self.conn.execute(
+                "INSERT INTO companies(name,domain,website,city,category,phone,source,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?) RETURNING id", (*values, _now()),
+            )
+            company.id = int(cur.fetchone()[0])
+        self.conn.commit()
+        return company
+
+    def list_companies(self) -> list[Company]:
+        rows = self.conn.execute("SELECT * FROM companies ORDER BY id").fetchall()
+        return [self._row_to_company(row) for row in rows]
+
+    def get_company(self, company_id: int) -> Company | None:
+        row = self.conn.execute("SELECT * FROM companies WHERE id=?", (company_id,)).fetchone()
+        return self._row_to_company(row) if row else None
+
+    @staticmethod
+    def _row_to_company(row: sqlite3.Row) -> Company:
+        return Company(
+            id=row["id"], name=row["name"], domain=row["domain"] or "",
+            website=row["website"] or "", city=row["city"] or "",
+            category=row["category"] or "", phone=row["phone"] or "",
+            source=row["source"] or "", created_at=_dt(row["created_at"]),
+        )
+
+    def add_company_signal(
+        self, company_id: int, key: str, value: str, evidence_url: str = ""
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO company_signals(company_id,key,value,evidence_url,created_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(company_id,key) DO UPDATE SET "
+            "value=excluded.value,evidence_url=excluded.evidence_url,created_at=excluded.created_at",
+            (company_id, key, str(value), evidence_url, _now()),
+        )
+        self.conn.commit()
+
+    def signals_of(self, company_id: int) -> dict[str, tuple[str, str]]:
+        rows = self.conn.execute(
+            "SELECT key,value,evidence_url FROM company_signals WHERE company_id=? ORDER BY key",
+            (company_id,),
+        ).fetchall()
+        return {r["key"]: (r["value"], r["evidence_url"]) for r in rows}
 
     def close(self) -> None:
         self.conn.close()
@@ -146,18 +248,18 @@ class Store:
         lead.email = lead.email.strip().lower()
         cur = self.conn.execute(
             """INSERT INTO leads(email,first_name,last_name,company,title,website,
-                                 linkedin,custom,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?)
+                                 linkedin,custom,company_id,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(email) DO UPDATE SET
                  first_name=excluded.first_name, last_name=excluded.last_name,
                  company=excluded.company, title=excluded.title,
                  website=excluded.website, linkedin=excluded.linkedin,
-                 custom=excluded.custom
+                 custom=excluded.custom, company_id=COALESCE(excluded.company_id,leads.company_id)
                RETURNING id""",
             (
                 lead.email, lead.first_name, lead.last_name,
                 lead.company, lead.title, lead.website, lead.linkedin,
-                json.dumps(lead.custom), _now(),
+                json.dumps(lead.custom), lead.company_id, _now(),
             ),
         )
         lead.id = cur.fetchone()[0]
@@ -206,6 +308,7 @@ class Store:
             custom=json.loads(row["custom"] or "{}"),
             fit_score=row["fit_score"], fit_reason=row["fit_reason"] or "",
             verify_status=row["verify_status"] or "",
+            company_id=row["company_id"],
         )
 
     # ── signals ────────────────────────────────────────────────────────────
@@ -276,10 +379,10 @@ class Store:
         try:
             cur = self.conn.execute(
                 """INSERT INTO messages(campaign_id,lead_id,step,scheduled_at,template_id,
-                                        subject,body,status,variant)
-                   VALUES(?,?,?,?,?,?,?,?,?) RETURNING id""",
+                                        subject,body,status,variant,approved)
+                   VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (m.campaign_id, m.lead_id, m.step, m.scheduled_at.isoformat(timespec="seconds"),
-                 m.template_id, m.subject, m.body, m.status, m.variant),
+                 m.template_id, m.subject, m.body, m.status, m.variant, int(m.approved)),
             )
             m.id = cur.fetchone()[0]
             self.conn.commit()
@@ -294,6 +397,30 @@ class Store:
             (now.isoformat(timespec="seconds"),),
         ).fetchall()
         return [self._row_to_message(r) for r in rows]
+
+    def get_message(self, message_id: int) -> Message | None:
+        row = self.conn.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+        return self._row_to_message(row) if row else None
+
+    def list_outbox(self) -> list[Message]:
+        rows = self.conn.execute(
+            "SELECT * FROM messages WHERE status='scheduled' ORDER BY scheduled_at,id"
+        ).fetchall()
+        return [self._row_to_message(row) for row in rows]
+
+    def set_message_approval(self, message_id: int, approved: bool) -> None:
+        self.conn.execute(
+            "UPDATE messages SET approved=? WHERE id=? AND status='scheduled'",
+            (int(approved), message_id),
+        )
+        self.conn.commit()
+
+    def reject_message(self, message_id: int) -> None:
+        self.conn.execute(
+            "UPDATE messages SET approved=0,status='rejected' WHERE id=? AND status='scheduled'",
+            (message_id,),
+        )
+        self.conn.commit()
 
     def messages_for_campaign(self, campaign_id: int) -> list[Message]:
         rows = self.conn.execute(
@@ -334,6 +461,7 @@ class Store:
             template_id=row["template_id"], subject=row["subject"], body=row["body"],
             status=row["status"], sent_at=_dt(row["sent_at"]), variant=row["variant"],
             error=row["error"],
+            approved=bool(row["approved"]),
         )
 
     # ── replies ────────────────────────────────────────────────────────────

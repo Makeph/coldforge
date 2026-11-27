@@ -27,6 +27,7 @@ class Lead:
     fit_score: int | None = None   # 0–100 against the stored ICP (see icp.py)
     fit_reason: str = ""
     verify_status: str = ""        # "" | ok | risky | invalid  (see verify.py)
+    company_id: int | None = None
     id: int | None = None
 
     def as_vars(self) -> dict[str, str]:
@@ -94,6 +95,7 @@ class Message:
     sent_at: datetime | None = None
     variant: str = ""              # A/B label
     error: str = ""
+    approved: bool = False
     id: int | None = None
 
 

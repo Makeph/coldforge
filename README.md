@@ -282,6 +282,17 @@ small and honest:
 | "Drop your site → learn who buys it", fit scoring, reply triage | AutoGTM tools (`explee.com` & co) | `icp build` + `leads score`, reply classification, `stats --by template` — local and editable |
 | Answer-engine visibility, keyword-cluster → article generation | `babylovegrowth.ai` | `geo check` asks the engines directly; `content plan`/`draft` write the articles — no fake backlink network, no dashboard |
 
+## Company prospecting pipeline
+
+`discover` imports free OSM or CSV company lists; `signals confirm free` then
+`signals profile` records only explicitly approved, evidenced website observations.
+`people find` looks only at public pages on the company's own domain, while
+`cohort` and `export --csv` build explainable, send-free lists. Scheduled mail
+stays in `outbox` until it passes the deterministic compliance gate and is
+approved; `tick` sends approved messages only unless `--auto-approve` is supplied.
+Paid discovery sources, LinkedIn, a web dashboard, autonomous heartbeats and
+Gmail/Microsoft transports are intentionally left as possible future work.
+
 ## Responsible use
 
 coldforge is a precision tool, not a spam cannon: low daily caps, send windows,
